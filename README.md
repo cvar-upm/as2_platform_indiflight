@@ -28,14 +28,28 @@ Channels:
     - 6: Aux1
     - 7: Aux2
 
-## pi-protocol (indiflight high-rate IMU, up to 2kHz)
+## pi-protocol (indiflight high-rate telemetry: IMU @ 2kHz, motor speeds @ 1kHz)
 
 The platform node also reads indiflight's `pi-protocol` telemetry channel on a dedicated
-background thread and publishes `sensor_msgs/msg/Imu` on `imu_high_rate`. This is a separate
-channel from MSP, capable of much higher rates (up to 2kHz, scheduler load permitting) than
-MSP's ~100Hz polling cap. A failure to connect to the pi-protocol UART is logged but is
-**non-fatal** — the platform node keeps running MSP/flight control regardless, it just won't
-publish `imu_high_rate`.
+background thread and publishes:
+- `sensor_msgs/msg/Imu` on `imu_high_rate` — up to 2000Hz.
+- `sensor_msgs/msg/JointState` on `motor_speed_high_rate` — measured motor angular speeds
+  (rad/s, `velocity` field), up to 1000Hz. Indexed in **Betaflight's own mixer output order**
+  (`[RR, FR, RL, FL]`) — this is *not* the `indi_controller`/simulator convention used elsewhere
+  in the wider workspace (`[FR, RR, RL, FL]`); permute if you need to match that.
+
+This is a separate channel from MSP, capable of much higher rates than MSP's ~100Hz polling cap.
+A failure to connect to the pi-protocol UART is logged but is **non-fatal** — the platform node
+keeps running MSP/flight control regardless, it just won't publish either high-rate topic.
+
+**Timestamps**: `header.stamp` on both topics is *not* raw host-arrival time — the FC's
+`time_us` (a monotonic microsecond counter since FC boot, in an epoch unrelated to the host
+clock) is converted to a host-clock timestamp via a continuously-adapting offset tracker
+(`PiProtocolClockSync`, sliding-window minimum-offset / "clock filter" method), self-correcting
+for clock drift over long runs. The raw `time_us` is preserved too, published alongside as
+`sensor_msgs/msg/TimeReference` on `imu_high_rate/time_reference` and
+`motor_speed_high_rate/time_reference` (`time_ref` = raw FC time, `source` =
+`"indiflight_fc_micros"`), correlated against the same corrected `header.stamp`.
 
 **Wiring**: on the FC, `FUNCTION_TELEMETRY_PI` must be assigned to a UART that is physically
 wired to a *second* serial port on the host (distinct from the MSP UART), at 921600 baud — e.g.
@@ -46,9 +60,10 @@ configs for the exact flag values on your target). Set `pi_protocol.device` /
 deployment-specific).
 
 **Build-time dependency**: the pi-protocol wire format is code-generated from
-[tudelft/pi-protocol](https://github.com/tudelft/pi-protocol)'s YAML message definitions via
-Jinja2 templates, at build time. This requires `python3` plus the packages in that repo's
-`python/requirements.txt` (Jinja2, PyYAML, semver) to be installed on the build machine:
+[fjanguita/pi-protocol](https://github.com/fjanguita/pi-protocol)'s (`motor-telemetry-support`
+branch) YAML message definitions via Jinja2 templates, at build time. This requires `python3`
+plus the packages in that repo's `python/requirements.txt` (Jinja2, PyYAML, semver) to be
+installed on the build machine:
 ```
 pip install -r <build-dir>/thirdparty/pi-protocol/python/requirements.txt
 ```
