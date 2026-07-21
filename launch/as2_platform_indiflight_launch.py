@@ -85,4 +85,18 @@ def generate_launch_description():
                                                   default_file=get_platform_config_file())
             ]
         ),
+        # Independent of the MSP-based platform node above: reads indiflight's
+        # high-rate pi-protocol telemetry channel on its own dedicated UART.
+        Node(
+            package='as2_platform_indiflight',
+            executable='as2_platform_indiflight_pi_protocol_node',
+            name='pi_protocol',
+            namespace=LaunchConfiguration('namespace'),
+            output='screen',
+            emulate_tty=True,
+            parameters=[
+                LaunchConfigurationFromConfigFile('platform_config_file',
+                                                  default_file=get_platform_config_file())
+            ]
+        ),
     ])

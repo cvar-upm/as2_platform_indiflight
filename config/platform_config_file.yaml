@@ -5,7 +5,11 @@
     external_odom: false  # Flag to use external odometry source
     device: "/dev/ttyTHS1"  # Serial port to connect to the Platform
     baudrate: 115200 # Baudrate of the serial port
-    imu: 
+    pi_protocol:
+      enable: false  # Set to true once the second UART is wired and configured on the FC
+      device: "/dev/ttyTHS2"  # Dedicated UART for indiflight's pi-protocol telemetry (NOT the MSP port above)
+      baudrate: 921600  # Matches indiflight's BAUD_AUTO default for FUNCTION_TELEMETRY_PI
+    imu:
       frequency: 0.0  # Frequency of IMU measures publication
       covariance:
         gyro: 0.0  # IMU gyroscope mean noise (set to 0 for not calibrated)

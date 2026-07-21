@@ -37,6 +37,66 @@ else()
   endif()
 endif()
 
+# pi-protocol dependency (indiflight's high-rate telemetry channel, separate from MSP)
+# lib/main/pi-protocol has no CMakeLists.txt of its own (it's YAML/Jinja2 templates + a
+# generator script, not a CMake project), so it's populated (not add_subdirectory'd) and
+# its C sources are generated/compiled explicitly below.
+set(LOCAL_PI_PROTOCOL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/pi-protocol)
+if(NOT EXISTS ${LOCAL_PI_PROTOCOL_SRC}/config.yaml)
+  message(STATUS "pi-protocol: cloning into ${LOCAL_PI_PROTOCOL_SRC}")
+  include(FetchContent)
+  fetchcontent_declare(
+    pi_protocol_src
+    GIT_REPOSITORY https://github.com/tudelft/pi-protocol.git
+    GIT_TAG d29d0077924d6af40285e1a331f90ba308b1e9d7
+    SOURCE_DIR ${LOCAL_PI_PROTOCOL_SRC}
+  )
+  fetchcontent_populate(pi_protocol_src)
+endif()
+
+# Generating pi-protocol.h/pi-messages.{h,c} requires python3 + Jinja2/PyYAML/semver:
+#   pip install -r thirdparty/pi-protocol/python/requirements.txt
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
+set(PI_PROTOCOL_GEN_DIR ${CMAKE_BINARY_DIR}/pi_protocol_gen)
+file(MAKE_DIRECTORY ${PI_PROTOCOL_GEN_DIR})
+
+file(GLOB PI_PROTOCOL_MSG_YAML ${LOCAL_PI_PROTOCOL_SRC}/msgs/*.yaml)
+file(GLOB PI_PROTOCOL_TEMPLATES ${LOCAL_PI_PROTOCOL_SRC}/templates/*.j2)
+
+add_custom_command(
+  OUTPUT
+    ${PI_PROTOCOL_GEN_DIR}/pi-protocol.h
+    ${PI_PROTOCOL_GEN_DIR}/pi-messages.h
+    ${PI_PROTOCOL_GEN_DIR}/pi-messages.c
+  COMMAND ${Python3_EXECUTABLE} ${LOCAL_PI_PROTOCOL_SRC}/python/generate.py
+          config.yaml --output-dir ${PI_PROTOCOL_GEN_DIR}
+  WORKING_DIRECTORY ${LOCAL_PI_PROTOCOL_SRC}
+  DEPENDS
+    ${LOCAL_PI_PROTOCOL_SRC}/config.yaml
+    ${PI_PROTOCOL_MSG_YAML}
+    ${PI_PROTOCOL_TEMPLATES}
+    ${LOCAL_PI_PROTOCOL_SRC}/python/generate.py
+  COMMENT "Generating pi-protocol C sources from YAML/Jinja2 templates"
+  VERBATIM
+)
+
+add_custom_target(pi_protocol_generate
+  DEPENDS
+    ${PI_PROTOCOL_GEN_DIR}/pi-protocol.h
+    ${PI_PROTOCOL_GEN_DIR}/pi-messages.h
+    ${PI_PROTOCOL_GEN_DIR}/pi-messages.c
+)
+
+# src/pi-protocol.c is hand-written (not generated) and ships in the repo; only
+# pi-messages.c is generated. Both #include the generated headers by name.
+add_library(pi_protocol_gen STATIC
+  ${PI_PROTOCOL_GEN_DIR}/pi-messages.c
+  ${LOCAL_PI_PROTOCOL_SRC}/src/pi-protocol.c
+)
+add_dependencies(pi_protocol_gen pi_protocol_generate)
+target_include_directories(pi_protocol_gen PUBLIC ${PI_PROTOCOL_GEN_DIR})
+
 # find dependencies
 set(PROJECT_DEPENDENCIES
   ament_cmake
@@ -83,15 +143,26 @@ add_library(${PROJECT_NAME} STATIC ${SOURCE_CPP_FILES})
 ament_target_dependencies(${PROJECT_NAME} ${PROJECT_DEPENDENCIES})
 target_link_libraries(${PROJECT_NAME} msp_fcu)
 
+# pi-protocol client library (indiflight high-rate telemetry, independent of MSP)
+add_library(${PROJECT_NAME}_pi_protocol STATIC src/pi_protocol_client.cpp)
+ament_target_dependencies(${PROJECT_NAME}_pi_protocol ${PROJECT_DEPENDENCIES})
+target_link_libraries(${PROJECT_NAME}_pi_protocol pi_protocol_gen)
+
+# pi-protocol node executable
+add_executable(${PROJECT_NAME}_pi_protocol_node src/pi_protocol_node.cpp)
+ament_target_dependencies(${PROJECT_NAME}_pi_protocol_node ${PROJECT_DEPENDENCIES})
+target_link_libraries(${PROJECT_NAME}_pi_protocol_node ${PROJECT_NAME}_pi_protocol)
+
 # Install the headers
 install(
   DIRECTORY include/
   DESTINATION include
 )
 
-# Install the node executable
+# Install the node executables
 install(TARGETS
   ${PROJECT_NAME}_node
+  ${PROJECT_NAME}_pi_protocol_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
