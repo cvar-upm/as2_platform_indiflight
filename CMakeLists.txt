@@ -2,7 +2,7 @@
 cmake_minimum_required(VERSION 3.5)
 
 # Set the project name
-set(PROJECT_NAME as2_platform_betaflight)
+set(PROJECT_NAME as2_platform_indiflight)
 project(${PROJECT_NAME})
 
 # Default to C++17

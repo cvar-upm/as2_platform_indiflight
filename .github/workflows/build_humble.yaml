@@ -39,11 +39,11 @@ jobs:
       - name: Limit lcov coverage to this package
         run: |
           mkdir -p $COLCON_HOME
-          printf 'lcov-result:\n  packages-select:\n    - as2_platform_betaflight\n' > $COLCON_HOME/defaults.yaml
+          printf 'lcov-result:\n  packages-select:\n    - as2_platform_indiflight\n' > $COLCON_HOME/defaults.yaml
       - name: build and test
         uses: ros-tooling/action-ros-ci@v0.3
         with:
           package-name: >
-            as2_platform_betaflight
+            as2_platform_indiflight
           target-ros2-distro: humble
           vcs-repo-file-url: /tmp/dependencies.repos

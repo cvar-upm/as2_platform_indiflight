@@ -38,12 +38,12 @@
  */
 
 #include "as2_core/core_functions.hpp"
-#include "as2_platform_betaflight/betaflight_platform.hpp"
+#include "as2_platform_indiflight/betaflight_platform.hpp"
 
 int main(int argc, char * argv[])
 {
   rclcpp::init(argc, argv);
-  auto node = std::make_shared<as2_platform_betaflight::BetaflightPlatform>();
+  auto node = std::make_shared<as2_platform_indiflight::BetaflightPlatform>();
   node->preset_loop_frequency(300);
   as2::spinLoop(node);
 

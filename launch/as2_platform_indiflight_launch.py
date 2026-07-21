@@ -27,7 +27,7 @@
 # CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
-"""Launch Pixhawk platform node."""
+"""Launch Betaflight/indiflight platform node."""
 
 __authors__ = 'Miguel Fernández Cortizas, Rafael Pérez Seguí'
 __copyright__ = 'Copyright (c) 2022 Universidad Politécnica de Madrid'
@@ -46,14 +46,14 @@ from launch_ros.actions import Node
 
 def get_platform_config_file():
     """Return the platform config file."""
-    package_folder = get_package_share_directory('as2_platform_betaflight')
+    package_folder = get_package_share_directory('as2_platform_indiflight')
     return os.path.join(package_folder,
                         'config/platform_config_file.yaml')
 
 
 def get_control_modes_file():
     """Return the control modes file."""
-    package_folder = get_package_share_directory('as2_platform_betaflight')
+    package_folder = get_package_share_directory('as2_platform_indiflight')
     return os.path.join(package_folder,
                         'config/control_modes.yaml')
 
@@ -71,8 +71,8 @@ def generate_launch_description():
                                              source_file=get_platform_config_file(),
                                              description='Platform configuration file'),
         Node(
-            package='as2_platform_betaflight',
-            executable='as2_platform_betaflight_node',
+            package='as2_platform_indiflight',
+            executable='as2_platform_indiflight_node',
             name='platform',
             namespace=LaunchConfiguration('namespace'),
             output='screen',

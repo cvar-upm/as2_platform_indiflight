@@ -34,8 +34,8 @@
  * @author Miguel Fernández Cortizas
  */
 
-#ifndef AS2_PLATFORM_BETAFLIGHT__BETAFLIGHT_PLATFORM_HPP_
-#define AS2_PLATFORM_BETAFLIGHT__BETAFLIGHT_PLATFORM_HPP_
+#ifndef AS2_PLATFORM_INDIFLIGHT__BETAFLIGHT_PLATFORM_HPP_
+#define AS2_PLATFORM_INDIFLIGHT__BETAFLIGHT_PLATFORM_HPP_
 
 #include <Eigen/Dense>
 
@@ -71,7 +71,7 @@
 
 #define PULSE_RANGE 1000
 
-namespace as2_platform_betaflight
+namespace as2_platform_indiflight
 {
 
 /**
@@ -287,6 +287,6 @@ private:
   void rcOffboard(int offboard);
 };
 
-}  // namespace as2_platform_betaflight
+}  // namespace as2_platform_indiflight
 
-#endif  // AS2_PLATFORM_BETAFLIGHT__BETAFLIGHT_PLATFORM_HPP_
+#endif  // AS2_PLATFORM_INDIFLIGHT__BETAFLIGHT_PLATFORM_HPP_
