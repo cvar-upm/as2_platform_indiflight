@@ -148,6 +148,8 @@ void PiProtocolClient::readLoop()
       const uint8_t msg_id = piParse(&parse_state_, buf[i]);
       if (msg_id == PI_MSG_IMU_ID && piMsgImuRx != nullptr && imu_callback_) {
         imu_callback_(*piMsgImuRx);
+      } else if (msg_id == PI_MSG_MOTOR_ID && piMsgMotorRx != nullptr && motor_callback_) {
+        motor_callback_(*piMsgMotorRx);
       }
     }
   }

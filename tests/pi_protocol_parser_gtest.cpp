@@ -75,6 +75,36 @@ TEST(PiProtocolParser, RoundTripImuMessage)
   EXPECT_FLOAT_EQ(piMsgImuRx->z, 0.2f);
 }
 
+TEST(PiProtocolParser, RoundTripMotorMessage)
+{
+  piMsgMotorTx.time_us = 654321;
+  piMsgMotorTx.omega0 = 1133.0f;
+  piMsgMotorTx.omega1 = 1140.5f;
+  piMsgMotorTx.omega2 = -1125.25f;
+  piMsgMotorTx.omega3 = 1150.75f;
+
+  uint8_t buf[2 * PI_MAX_PACKET_LEN];
+  const unsigned int n = piAccumulateMsg(&piMsgMotorTx, buf);
+  ASSERT_GT(n, 0u);
+
+  pi_parse_states_t state{};
+  uint8_t last_id = PI_MSG_NONE_ID;
+  for (unsigned int i = 0; i < n; i++) {
+    const uint8_t id = piParse(&state, buf[i]);
+    if (id != PI_MSG_NONE_ID) {
+      last_id = id;
+    }
+  }
+
+  ASSERT_EQ(last_id, PI_MSG_MOTOR_ID);
+  ASSERT_NE(piMsgMotorRx, nullptr);
+  EXPECT_EQ(piMsgMotorRx->time_us, 654321u);
+  EXPECT_FLOAT_EQ(piMsgMotorRx->omega0, 1133.0f);
+  EXPECT_FLOAT_EQ(piMsgMotorRx->omega1, 1140.5f);
+  EXPECT_FLOAT_EQ(piMsgMotorRx->omega2, -1125.25f);
+  EXPECT_FLOAT_EQ(piMsgMotorRx->omega3, 1150.75f);
+}
+
 TEST(PiProtocolParser, CorruptedChecksumIsRejected)
 {
   piMsgImuTx.time_us = 42;

@@ -54,8 +54,10 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <sensor_msgs/msg/battery_state.hpp>
 #include <sensor_msgs/msg/imu.hpp>
+#include <sensor_msgs/msg/joint_state.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <sensor_msgs/msg/nav_sat_status.hpp>
+#include <sensor_msgs/msg/time_reference.hpp>
 #include <std_msgs/msg/u_int16_multi_array.hpp>
 
 #include "as2_msgs/msg/u_int16_multi_array_stamped.hpp"
@@ -70,6 +72,7 @@
 #include <msp/msp_msg.hpp>
 
 #include "as2_platform_indiflight/pi_protocol_client.hpp"
+#include "as2_platform_indiflight/pi_protocol_clock_sync.hpp"
 
 #define PULSE_RANGE 1000
 
@@ -175,11 +178,21 @@ private:
   std::string pi_protocol_device_ = "/dev/ttyUSB1";
   int pi_protocol_baudrate_ = 921600;
   PiProtocolClient pi_protocol_client_;
+  // Shared by both pi-protocol callbacks below: both messages ride the same FC
+  // clock domain, so pooling samples from both converges faster than two
+  // independent trackers would. Only ever touched from PiProtocolClient's
+  // single dedicated reader thread - see PiProtocolClockSync's own comment.
+  PiProtocolClockSync pi_protocol_clock_sync_;
 
   /**
    * @brief Callback for pi-protocol IMU messages (up to 2kHz)
    */
   void onPiProtocolImu(const pi_IMU_t & imu);
+
+  /**
+   * @brief Callback for pi-protocol MOTOR messages (measured angular speeds, up to 1kHz)
+   */
+  void onPiProtocolMotor(const pi_MOTOR_t & motor);
 
   void computeControlSlopes()
   {
@@ -280,6 +293,10 @@ private:
   rclcpp::Publisher<as2_msgs::msg::UInt16MultiArrayStamped>::SharedPtr debug_rc_read_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr raw_imu_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_high_rate_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::TimeReference>::SharedPtr imu_high_rate_time_ref_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr motor_speed_high_rate_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::TimeReference>::SharedPtr
+    motor_speed_high_rate_time_ref_pub_;
   rclcpp::Publisher<geometry_msgs::msg::QuaternionStamped>::SharedPtr attitude_pub_;
   rclcpp::Publisher<as2_msgs::msg::UInt16MultiArrayStamped>::SharedPtr debug_motors_pub_;
   as2_msgs::msg::UInt16MultiArrayStamped debug_rc_command_;

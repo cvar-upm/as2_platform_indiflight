@@ -60,6 +60,7 @@ class PiProtocolClient
 {
 public:
   using ImuCallback = std::function<void (const pi_IMU_t &)>;
+  using MotorCallback = std::function<void (const pi_MOTOR_t &)>;
 
   PiProtocolClient() = default;
   ~PiProtocolClient();
@@ -85,6 +86,12 @@ public:
    */
   void setImuCallback(ImuCallback callback) {imu_callback_ = std::move(callback);}
 
+  /**
+   * @brief Set the callback invoked for every successfully parsed MOTOR message.
+   * Must be set before connect() to reliably receive the first messages.
+   */
+  void setMotorCallback(MotorCallback callback) {motor_callback_ = std::move(callback);}
+
 private:
   void readLoop();
 
@@ -92,6 +99,7 @@ private:
   std::thread read_thread_;
   std::atomic<bool> running_{false};
   ImuCallback imu_callback_;
+  MotorCallback motor_callback_;
   pi_parse_states_t parse_state_{};
 };
 

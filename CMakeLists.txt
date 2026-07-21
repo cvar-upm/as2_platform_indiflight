@@ -47,8 +47,8 @@ if(NOT EXISTS ${LOCAL_PI_PROTOCOL_SRC}/config.yaml)
   include(FetchContent)
   fetchcontent_declare(
     pi_protocol_src
-    GIT_REPOSITORY https://github.com/tudelft/pi-protocol.git
-    GIT_TAG d29d0077924d6af40285e1a331f90ba308b1e9d7
+    GIT_REPOSITORY https://github.com/fjanguita/pi-protocol.git
+    GIT_TAG 8716ac035fb54bbfdbb02f85c329f4845426f882  # motor-telemetry-support: adds MOTOR message
     SOURCE_DIR ${LOCAL_PI_PROTOCOL_SRC}
   )
   fetchcontent_populate(pi_protocol_src)
@@ -126,6 +126,7 @@ include_directories(
 set(SOURCE_CPP_FILES
   src/betaflight_platform.cpp
   src/pi_protocol_client.cpp
+  src/pi_protocol_clock_sync.cpp
 )
 
 # Create the node executable

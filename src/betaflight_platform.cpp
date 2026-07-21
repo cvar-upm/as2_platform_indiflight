@@ -202,6 +202,12 @@ BetaflightPlatform::BetaflightPlatform(const rclcpp::NodeOptions & options)
   raw_imu_pub_ = this->create_publisher<sensor_msgs::msg::Imu>("raw_imu", 1);
   imu_high_rate_pub_ = this->create_publisher<sensor_msgs::msg::Imu>(
     "imu_high_rate", rclcpp::SensorDataQoS());
+  imu_high_rate_time_ref_pub_ = this->create_publisher<sensor_msgs::msg::TimeReference>(
+    "imu_high_rate/time_reference", rclcpp::SensorDataQoS());
+  motor_speed_high_rate_pub_ = this->create_publisher<sensor_msgs::msg::JointState>(
+    "motor_speed_high_rate", rclcpp::SensorDataQoS());
+  motor_speed_high_rate_time_ref_pub_ = this->create_publisher<sensor_msgs::msg::TimeReference>(
+    "motor_speed_high_rate/time_reference", rclcpp::SensorDataQoS());
   attitude_pub_ = this->create_publisher<geometry_msgs::msg::QuaternionStamped>("attitude", 1);
   debug_motors_pub_ = this->create_publisher<as2_msgs::msg::UInt16MultiArrayStamped>(
     "debug/motors", 1);
@@ -251,10 +257,12 @@ BetaflightPlatform::BetaflightPlatform(const rclcpp::NodeOptions & options)
 
   if (pi_protocol_enable_) {
     pi_protocol_client_.setImuCallback([this](const pi_IMU_t & imu) {onPiProtocolImu(imu);});
+    pi_protocol_client_.setMotorCallback(
+      [this](const pi_MOTOR_t & motor) {onPiProtocolMotor(motor);});
     if (!pi_protocol_client_.connect(pi_protocol_device_, pi_protocol_baudrate_)) {
       RCLCPP_ERROR(
         this->get_logger(),
-        "Could not connect to pi-protocol device %s - continuing without high-rate IMU",
+        "Could not connect to pi-protocol device %s - continuing without high-rate IMU/motor data",
         pi_protocol_device_.c_str());
       // Non-fatal on purpose: a bad second UART must not prevent flight control from starting.
     } else {
@@ -461,8 +469,14 @@ void BetaflightPlatform::onImu(const msp::msg::RawImu & imu)
 
 void BetaflightPlatform::onPiProtocolImu(const pi_IMU_t & imu)
 {
+  // Captured first, right after piParse() hands off the struct, to keep the
+  // clock-sync offset sample as tight as possible.
+  const int64_t host_now_ns = this->get_clock()->now().nanoseconds();
+  const int64_t synced_ns = pi_protocol_clock_sync_.sync(imu.time_us, host_now_ns);
+  const rclcpp::Time stamp(synced_ns);
+
   sensor_msgs::msg::Imu imu_msg;
-  imu_msg.header.stamp = this->get_clock()->now();
+  imu_msg.header.stamp = stamp;
   imu_msg.header.frame_id = base_link_frame_id_;
 
   // pi-protocol's IMU message already carries SI units (gyro rad/s, accel m/s^2)
@@ -488,6 +502,40 @@ void BetaflightPlatform::onPiProtocolImu(const pi_IMU_t & imu)
   imu_msg.orientation_covariance[0] = -1.0;
 
   imu_high_rate_pub_->publish(imu_msg);
+
+  // Raw FC time_us preserved alongside the corrected stamp - see
+  // PiProtocolClockSync for why time_us can't be used as header.stamp directly.
+  sensor_msgs::msg::TimeReference time_ref_msg;
+  time_ref_msg.header.stamp = stamp;
+  time_ref_msg.header.frame_id = base_link_frame_id_;
+  time_ref_msg.time_ref = rclcpp::Time(static_cast<int64_t>(imu.time_us) * 1000);
+  time_ref_msg.source = "indiflight_fc_micros";
+  imu_high_rate_time_ref_pub_->publish(time_ref_msg);
+}
+
+void BetaflightPlatform::onPiProtocolMotor(const pi_MOTOR_t & motor)
+{
+  const int64_t host_now_ns = this->get_clock()->now().nanoseconds();
+  const int64_t synced_ns = pi_protocol_clock_sync_.sync(motor.time_us, host_now_ns);
+  const rclcpp::Time stamp(synced_ns);
+
+  sensor_msgs::msg::JointState motor_msg;
+  motor_msg.header.stamp = stamp;
+  motor_msg.header.frame_id = base_link_frame_id_;
+  // Indexed in Betaflight's own mixer output order ([RR, FR, RL, FL], see
+  // mixer_init.c mixerQuadX[]) - NOT the indi_controller/simulator convention
+  // ([FR, RR, RL, FL]) used elsewhere in the wider workspace.
+  motor_msg.name = {"motor0", "motor1", "motor2", "motor3"};
+  motor_msg.velocity = {motor.omega0, motor.omega1, motor.omega2, motor.omega3};
+
+  motor_speed_high_rate_pub_->publish(motor_msg);
+
+  sensor_msgs::msg::TimeReference time_ref_msg;
+  time_ref_msg.header.stamp = stamp;
+  time_ref_msg.header.frame_id = base_link_frame_id_;
+  time_ref_msg.time_ref = rclcpp::Time(static_cast<int64_t>(motor.time_us) * 1000);
+  time_ref_msg.source = "indiflight_fc_micros";
+  motor_speed_high_rate_time_ref_pub_->publish(time_ref_msg);
 }
 
 void BetaflightPlatform::onAltitude(const msp::msg::Altitude & altitude)
