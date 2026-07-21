@@ -125,6 +125,7 @@ include_directories(
 # Set source files
 set(SOURCE_CPP_FILES
   src/betaflight_platform.cpp
+  src/pi_protocol_client.cpp
 )
 
 # Create the node executable
@@ -134,6 +135,7 @@ add_executable(${PROJECT_NAME}_node
 
 target_link_libraries(${PROJECT_NAME}_node
   msp_fcu
+  pi_protocol_gen
 )
 
 ament_target_dependencies(${PROJECT_NAME}_node ${PROJECT_DEPENDENCIES})
@@ -141,17 +143,7 @@ ament_target_dependencies(${PROJECT_NAME}_node ${PROJECT_DEPENDENCIES})
 # # Create the library
 add_library(${PROJECT_NAME} STATIC ${SOURCE_CPP_FILES})
 ament_target_dependencies(${PROJECT_NAME} ${PROJECT_DEPENDENCIES})
-target_link_libraries(${PROJECT_NAME} msp_fcu)
-
-# pi-protocol client library (indiflight high-rate telemetry, independent of MSP)
-add_library(${PROJECT_NAME}_pi_protocol STATIC src/pi_protocol_client.cpp)
-ament_target_dependencies(${PROJECT_NAME}_pi_protocol ${PROJECT_DEPENDENCIES})
-target_link_libraries(${PROJECT_NAME}_pi_protocol pi_protocol_gen)
-
-# pi-protocol node executable
-add_executable(${PROJECT_NAME}_pi_protocol_node src/pi_protocol_node.cpp)
-ament_target_dependencies(${PROJECT_NAME}_pi_protocol_node ${PROJECT_DEPENDENCIES})
-target_link_libraries(${PROJECT_NAME}_pi_protocol_node ${PROJECT_NAME}_pi_protocol)
+target_link_libraries(${PROJECT_NAME} msp_fcu pi_protocol_gen)
 
 # Install the headers
 install(
@@ -159,10 +151,9 @@ install(
   DESTINATION include
 )
 
-# Install the node executables
+# Install the node executable
 install(TARGETS
   ${PROJECT_NAME}_node
-  ${PROJECT_NAME}_pi_protocol_node
   DESTINATION lib/${PROJECT_NAME}
 )
 

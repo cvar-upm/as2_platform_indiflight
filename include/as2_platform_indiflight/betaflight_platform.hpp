@@ -69,6 +69,8 @@
 #include <msp/FlightController.hpp>
 #include <msp/msp_msg.hpp>
 
+#include "as2_platform_indiflight/pi_protocol_client.hpp"
+
 #define PULSE_RANGE 1000
 
 namespace as2_platform_indiflight
@@ -99,6 +101,7 @@ public:
   ~BetaflightPlatform()
   {
     fcu_.disconnect();
+    pi_protocol_client_.disconnect();
   }
 
 public:
@@ -164,6 +167,19 @@ private:
    * @brief Callback for RC reads from the controller
    */
   void onRc(const msp::msg::Rc & rc);
+
+  // pi-protocol related functions and variables (indiflight's high-rate telemetry
+  // channel, independent of MSP - a connect failure here must stay non-fatal so a
+  // bad second UART can never prevent flight control from starting)
+  bool pi_protocol_enable_ = false;
+  std::string pi_protocol_device_ = "/dev/ttyUSB1";
+  int pi_protocol_baudrate_ = 921600;
+  PiProtocolClient pi_protocol_client_;
+
+  /**
+   * @brief Callback for pi-protocol IMU messages (up to 2kHz)
+   */
+  void onPiProtocolImu(const pi_IMU_t & imu);
 
   void computeControlSlopes()
   {
@@ -263,6 +279,7 @@ private:
   rclcpp::Publisher<as2_msgs::msg::UInt16MultiArrayStamped>::SharedPtr debug_rc_command_pub_;
   rclcpp::Publisher<as2_msgs::msg::UInt16MultiArrayStamped>::SharedPtr debug_rc_read_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr raw_imu_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_high_rate_pub_;
   rclcpp::Publisher<geometry_msgs::msg::QuaternionStamped>::SharedPtr attitude_pub_;
   rclcpp::Publisher<as2_msgs::msg::UInt16MultiArrayStamped>::SharedPtr debug_motors_pub_;
   as2_msgs::msg::UInt16MultiArrayStamped debug_rc_command_;

@@ -30,17 +30,19 @@ Channels:
 
 ## pi-protocol (indiflight high-rate IMU, up to 2kHz)
 
-A second, independent node (`as2_platform_indiflight_pi_protocol_node`, launched alongside the
-main platform node) reads indiflight's `pi-protocol` telemetry channel and publishes
-`sensor_msgs/msg/Imu` on `imu_high_rate`. This is a separate channel from MSP, capable of much
-higher rates (up to 2kHz, scheduler load permitting) than MSP's ~100Hz polling cap.
+The platform node also reads indiflight's `pi-protocol` telemetry channel on a dedicated
+background thread and publishes `sensor_msgs/msg/Imu` on `imu_high_rate`. This is a separate
+channel from MSP, capable of much higher rates (up to 2kHz, scheduler load permitting) than
+MSP's ~100Hz polling cap. A failure to connect to the pi-protocol UART is logged but is
+**non-fatal** — the platform node keeps running MSP/flight control regardless, it just won't
+publish `imu_high_rate`.
 
 **Wiring**: on the FC, `FUNCTION_TELEMETRY_PI` must be assigned to a UART that is physically
 wired to a *second* serial port on the host (distinct from the MSP UART), at 921600 baud — e.g.
 via the CLI: `serial <n> 262144 115200 57600 0 921600` (see indiflight's own `BTFL_cli` example
 configs for the exact flag values on your target). Set `pi_protocol.device` /
 `pi_protocol.baudrate` in `config/platform_config_file.yaml` to match, and
-`pi_protocol.enable: true` to turn the node on (it defaults to disabled since the device path is
+`pi_protocol.enable: true` to turn it on (it defaults to disabled since the device path is
 deployment-specific).
 
 **Build-time dependency**: the pi-protocol wire format is code-generated from

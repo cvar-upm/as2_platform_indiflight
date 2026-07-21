@@ -65,6 +65,11 @@ void BetaflightPlatform::readParameters()
   this->declare_parameter<int>("baudrate");
   this->declare_parameter<bool>("external_odom");
 
+  // pi-protocol config parameters (indiflight high-rate telemetry, separate UART from MSP)
+  this->declare_parameter<bool>("pi_protocol.enable", pi_protocol_enable_);
+  this->declare_parameter<std::string>("pi_protocol.device", pi_protocol_device_);
+  this->declare_parameter<int>("pi_protocol.baudrate", pi_protocol_baudrate_);
+
   // IMU config parameters
   this->declare_parameter<float>("imu.frequency");
   this->declare_parameter<float>("imu.covariance.gyro");
@@ -106,6 +111,10 @@ void BetaflightPlatform::readParameters()
   device_ = this->get_parameter("device").as_string();
   baudrate_ = this->get_parameter("baudrate").as_int();
   external_odom_ = this->get_parameter("external_odom").as_bool();
+
+  pi_protocol_enable_ = this->get_parameter("pi_protocol.enable").as_bool();
+  pi_protocol_device_ = this->get_parameter("pi_protocol.device").as_string();
+  pi_protocol_baudrate_ = this->get_parameter("pi_protocol.baudrate").as_int();
 
   imu_hz_ = this->get_parameter("imu.frequency").as_double();
   imu_gyro_covariance_ = this->get_parameter("imu.covariance.gyro").as_double();
@@ -191,6 +200,8 @@ BetaflightPlatform::BetaflightPlatform(const rclcpp::NodeOptions & options)
   debug_rc_command_pub_ = this->create_publisher<as2_msgs::msg::UInt16MultiArrayStamped>(
     "debug/rc/command", 1);
   raw_imu_pub_ = this->create_publisher<sensor_msgs::msg::Imu>("raw_imu", 1);
+  imu_high_rate_pub_ = this->create_publisher<sensor_msgs::msg::Imu>(
+    "imu_high_rate", rclcpp::SensorDataQoS());
   attitude_pub_ = this->create_publisher<geometry_msgs::msg::QuaternionStamped>("attitude", 1);
   debug_motors_pub_ = this->create_publisher<as2_msgs::msg::UInt16MultiArrayStamped>(
     "debug/motors", 1);
@@ -237,6 +248,21 @@ BetaflightPlatform::BetaflightPlatform(const rclcpp::NodeOptions & options)
       this->get_logger(), "RC frequency is set to 0, RC data will not be published");
   }
   box_names_ = fcu_.getBoxNames();
+
+  if (pi_protocol_enable_) {
+    pi_protocol_client_.setImuCallback([this](const pi_IMU_t & imu) {onPiProtocolImu(imu);});
+    if (!pi_protocol_client_.connect(pi_protocol_device_, pi_protocol_baudrate_)) {
+      RCLCPP_ERROR(
+        this->get_logger(),
+        "Could not connect to pi-protocol device %s - continuing without high-rate IMU",
+        pi_protocol_device_.c_str());
+      // Non-fatal on purpose: a bad second UART must not prevent flight control from starting.
+    } else {
+      RCLCPP_INFO(
+        this->get_logger(), "pi-protocol connected on %s @ %d baud",
+        pi_protocol_device_.c_str(), pi_protocol_baudrate_);
+    }
+  }
 
   // Clear layout dimensions if they were set in a previous publication
   debug_rc_command_.layout.dim.clear();
@@ -431,6 +457,37 @@ void BetaflightPlatform::onImu(const msp::msg::RawImu & imu)
   // mag_msg.magnetic_field.z = imu_si.mag[2] * 1e-6;
 
   imu_sensor_ptr_->updateAndPublish(imu_msg);
+}
+
+void BetaflightPlatform::onPiProtocolImu(const pi_IMU_t & imu)
+{
+  sensor_msgs::msg::Imu imu_msg;
+  imu_msg.header.stamp = this->get_clock()->now();
+  imu_msg.header.frame_id = base_link_frame_id_;
+
+  // pi-protocol's IMU message already carries SI units (gyro rad/s, accel m/s^2)
+  // despite the roll/pitch/yaw field names - see indiflight/src/main/telemetry/pi.c.
+  // No scaling needed, unlike MSP RAW_IMU above.
+  imu_msg.angular_velocity.x = imu.roll;
+  imu_msg.angular_velocity.y = imu.pitch;
+  imu_msg.angular_velocity.z = imu.yaw;
+  imu_msg.linear_acceleration.x = imu.x;
+  imu_msg.linear_acceleration.y = imu.y;
+  imu_msg.linear_acceleration.z = imu.z;
+
+  // imu_gyro_covariance_/imu_accel_covariance_ are shared with the MSP raw_imu path
+  // (same physical IMU), but unlike that path this one must NOT apply the deg->rad
+  // conversion to the gyro covariance: pi-protocol's gyro is already in rad/s.
+  imu_msg.angular_velocity_covariance[0] = imu_gyro_covariance_;
+  imu_msg.angular_velocity_covariance[4] = imu_gyro_covariance_;
+  imu_msg.angular_velocity_covariance[8] = imu_gyro_covariance_;
+  imu_msg.linear_acceleration_covariance[0] = imu_accel_covariance_;
+  imu_msg.linear_acceleration_covariance[4] = imu_accel_covariance_;
+  imu_msg.linear_acceleration_covariance[8] = imu_accel_covariance_;
+  // Orientation not provided on this channel.
+  imu_msg.orientation_covariance[0] = -1.0;
+
+  imu_high_rate_pub_->publish(imu_msg);
 }
 
 void BetaflightPlatform::onAltitude(const msp::msg::Altitude & altitude)
