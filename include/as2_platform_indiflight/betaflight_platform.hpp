@@ -185,14 +185,13 @@ private:
   PiProtocolClockSync pi_protocol_clock_sync_;
 
   /**
-   * @brief Callback for pi-protocol IMU messages (up to 2kHz)
+   * @brief Callback for pi-protocol EKF_INPUTS messages: a single synchronized
+   * bundle (accel + gyro + all 4 motor speeds, one sample each, one time_us),
+   * republished here as separate imu_high_rate/motor_speed_high_rate topics -
+   * the synchronization only needs to happen on the wire, not in how it's
+   * exposed to ROS consumers. Up to 2kHz.
    */
-  void onPiProtocolImu(const pi_IMU_t & imu);
-
-  /**
-   * @brief Callback for pi-protocol MOTOR messages (measured angular speeds, up to 1kHz)
-   */
-  void onPiProtocolMotor(const pi_MOTOR_t & motor);
+  void onPiProtocolEkfInputs(const pi_EKF_INPUTS_t & msg);
 
   void computeControlSlopes()
   {
@@ -293,10 +292,11 @@ private:
   rclcpp::Publisher<as2_msgs::msg::UInt16MultiArrayStamped>::SharedPtr debug_rc_read_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr raw_imu_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_high_rate_pub_;
-  rclcpp::Publisher<sensor_msgs::msg::TimeReference>::SharedPtr imu_high_rate_time_ref_pub_;
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr motor_speed_high_rate_pub_;
-  rclcpp::Publisher<sensor_msgs::msg::TimeReference>::SharedPtr
-    motor_speed_high_rate_time_ref_pub_;
+  // Single publisher: imu_high_rate and motor_speed_high_rate now always
+  // share the exact same time_us (one EKF_INPUTS bundle feeds both), so a
+  // separate time-reference topic per output topic would just be duplicates.
+  rclcpp::Publisher<sensor_msgs::msg::TimeReference>::SharedPtr pi_protocol_time_ref_pub_;
   rclcpp::Publisher<geometry_msgs::msg::QuaternionStamped>::SharedPtr attitude_pub_;
   rclcpp::Publisher<as2_msgs::msg::UInt16MultiArrayStamped>::SharedPtr debug_motors_pub_;
   as2_msgs::msg::UInt16MultiArrayStamped debug_rc_command_;

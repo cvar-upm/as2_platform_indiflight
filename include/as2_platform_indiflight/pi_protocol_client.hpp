@@ -61,6 +61,7 @@ class PiProtocolClient
 public:
   using ImuCallback = std::function<void (const pi_IMU_t &)>;
   using MotorCallback = std::function<void (const pi_MOTOR_t &)>;
+  using EkfInputsCallback = std::function<void (const pi_EKF_INPUTS_t &)>;
 
   PiProtocolClient() = default;
   ~PiProtocolClient();
@@ -92,6 +93,16 @@ public:
    */
   void setMotorCallback(MotorCallback callback) {motor_callback_ = std::move(callback);}
 
+  /**
+   * @brief Set the callback invoked for every successfully parsed EKF_INPUTS
+   * message - a single synchronized bundle (accel + gyro + all 4 motor
+   * speeds, one sample each, one time_us), for consumers that need every
+   * input from the same instant rather than independently-timed IMU/MOTOR
+   * streams. Must be set before connect() to reliably receive the first
+   * messages.
+   */
+  void setEkfInputsCallback(EkfInputsCallback callback) {ekf_inputs_callback_ = std::move(callback);}
+
 private:
   void readLoop();
 
@@ -100,6 +111,7 @@ private:
   std::atomic<bool> running_{false};
   ImuCallback imu_callback_;
   MotorCallback motor_callback_;
+  EkfInputsCallback ekf_inputs_callback_;
   pi_parse_states_t parse_state_{};
 };
 

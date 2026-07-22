@@ -150,6 +150,10 @@ void PiProtocolClient::readLoop()
         imu_callback_(*piMsgImuRx);
       } else if (msg_id == PI_MSG_MOTOR_ID && piMsgMotorRx != nullptr && motor_callback_) {
         motor_callback_(*piMsgMotorRx);
+      } else if (msg_id == PI_MSG_EKF_INPUTS_ID && piMsgEkfInputsRx != nullptr &&
+        ekf_inputs_callback_)
+      {
+        ekf_inputs_callback_(*piMsgEkfInputsRx);
       }
     }
   }

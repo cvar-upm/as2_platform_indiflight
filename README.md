@@ -28,15 +28,25 @@ Channels:
     - 6: Aux1
     - 7: Aux2
 
-## pi-protocol (indiflight high-rate telemetry: IMU @ 2kHz, motor speeds @ 1kHz)
+## pi-protocol (indiflight high-rate telemetry, up to 2kHz, synchronized)
 
 The platform node also reads indiflight's `pi-protocol` telemetry channel on a dedicated
-background thread and publishes:
-- `sensor_msgs/msg/Imu` on `imu_high_rate` — up to 2000Hz.
+background thread. The wire format is a single synchronized bundle per sample — `EKF_INPUTS`
+(accel + gyro rates + all 4 motor speeds, one snapshot, one `time_us`, fixed-point encoded for
+bandwidth) — republished here as two separate ROS topics once parsed, since the synchronization
+only needs to happen on the wire, not in how it's exposed to consumers:
+- `sensor_msgs/msg/Imu` on `imu_high_rate`.
 - `sensor_msgs/msg/JointState` on `motor_speed_high_rate` — measured motor angular speeds
-  (rad/s, `velocity` field), up to 1000Hz. Indexed in **Betaflight's own mixer output order**
+  (rad/s, `velocity` field). Indexed in **Betaflight's own mixer output order**
   (`[RR, FR, RL, FL]`) — this is *not* the `indi_controller`/simulator convention used elsewhere
   in the wider workspace (`[FR, RR, RL, FL]`); permute if you need to match that.
+
+Both topics always share the exact same sample instant and timestamp — unlike sending IMU and
+motor data as two independently-timed messages, this is a real synchronization guarantee, not
+just accurate timestamping of two separately-sampled streams. That matters for anything that
+numerically differentiates gyro or evaluates a model at the current motor speed (e.g. an
+offboard INDI controller): it needs every input from the same instant, not just correctly
+time-stamped inputs from different instants.
 
 This is a separate channel from MSP, capable of much higher rates than MSP's ~100Hz polling cap.
 A failure to connect to the pi-protocol UART is logged but is **non-fatal** — the platform node
@@ -47,9 +57,9 @@ keeps running MSP/flight control regardless, it just won't publish either high-r
 clock) is converted to a host-clock timestamp via a continuously-adapting offset tracker
 (`PiProtocolClockSync`, sliding-window minimum-offset / "clock filter" method), self-correcting
 for clock drift over long runs. The raw `time_us` is preserved too, published alongside as
-`sensor_msgs/msg/TimeReference` on `imu_high_rate/time_reference` and
-`motor_speed_high_rate/time_reference` (`time_ref` = raw FC time, `source` =
-`"indiflight_fc_micros"`), correlated against the same corrected `header.stamp`.
+`sensor_msgs/msg/TimeReference` on `pi_protocol/time_reference` (`time_ref` = raw FC time,
+`source` = `"indiflight_fc_micros"`) — one shared topic, since both `imu_high_rate` and
+`motor_speed_high_rate` now always come from the same synchronized sample.
 
 **Wiring**: on the FC, `FUNCTION_TELEMETRY_PI` must be assigned to a UART that is physically
 wired to a *second* serial port on the host (distinct from the MSP UART), at 921600 baud — e.g.

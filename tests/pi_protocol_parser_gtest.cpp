@@ -105,6 +105,48 @@ TEST(PiProtocolParser, RoundTripMotorMessage)
   EXPECT_FLOAT_EQ(piMsgMotorRx->omega3, 1150.75f);
 }
 
+TEST(PiProtocolParser, RoundTripEkfInputsMessage)
+{
+  piMsgEkfInputsTx.time_us = 111222;
+  piMsgEkfInputsTx.x = 2048;    // 1g on x, per EKF_INPUTS.yaml's int16 * (9.81/2048) scale
+  piMsgEkfInputsTx.y = -1024;
+  piMsgEkfInputsTx.z = 512;
+  piMsgEkfInputsTx.p = 16384;   // per EKF_INPUTS.yaml's int16 * ((2000*pi/180)/32768) scale
+  piMsgEkfInputsTx.q = -8192;
+  piMsgEkfInputsTx.r = 4096;
+  piMsgEkfInputsTx.omega1 = 1133;  // rad/s directly, no scaling
+  piMsgEkfInputsTx.omega2 = 1140;
+  piMsgEkfInputsTx.omega3 = 1125;
+  piMsgEkfInputsTx.omega4 = 1150;
+
+  uint8_t buf[2 * PI_MAX_PACKET_LEN];
+  const unsigned int n = piAccumulateMsg(&piMsgEkfInputsTx, buf);
+  ASSERT_GT(n, 0u);
+
+  pi_parse_states_t state{};
+  uint8_t last_id = PI_MSG_NONE_ID;
+  for (unsigned int i = 0; i < n; i++) {
+    const uint8_t id = piParse(&state, buf[i]);
+    if (id != PI_MSG_NONE_ID) {
+      last_id = id;
+    }
+  }
+
+  ASSERT_EQ(last_id, PI_MSG_EKF_INPUTS_ID);
+  ASSERT_NE(piMsgEkfInputsRx, nullptr);
+  EXPECT_EQ(piMsgEkfInputsRx->time_us, 111222u);
+  EXPECT_EQ(piMsgEkfInputsRx->x, 2048);
+  EXPECT_EQ(piMsgEkfInputsRx->y, -1024);
+  EXPECT_EQ(piMsgEkfInputsRx->z, 512);
+  EXPECT_EQ(piMsgEkfInputsRx->p, 16384);
+  EXPECT_EQ(piMsgEkfInputsRx->q, -8192);
+  EXPECT_EQ(piMsgEkfInputsRx->r, 4096);
+  EXPECT_EQ(piMsgEkfInputsRx->omega1, 1133u);
+  EXPECT_EQ(piMsgEkfInputsRx->omega2, 1140u);
+  EXPECT_EQ(piMsgEkfInputsRx->omega3, 1125u);
+  EXPECT_EQ(piMsgEkfInputsRx->omega4, 1150u);
+}
+
 TEST(PiProtocolParser, CorruptedChecksumIsRejected)
 {
   piMsgImuTx.time_us = 42;

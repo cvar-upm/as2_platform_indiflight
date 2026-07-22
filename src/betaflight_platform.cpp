@@ -202,12 +202,10 @@ BetaflightPlatform::BetaflightPlatform(const rclcpp::NodeOptions & options)
   raw_imu_pub_ = this->create_publisher<sensor_msgs::msg::Imu>("raw_imu", 1);
   imu_high_rate_pub_ = this->create_publisher<sensor_msgs::msg::Imu>(
     "imu_high_rate", rclcpp::SensorDataQoS());
-  imu_high_rate_time_ref_pub_ = this->create_publisher<sensor_msgs::msg::TimeReference>(
-    "imu_high_rate/time_reference", rclcpp::SensorDataQoS());
   motor_speed_high_rate_pub_ = this->create_publisher<sensor_msgs::msg::JointState>(
     "motor_speed_high_rate", rclcpp::SensorDataQoS());
-  motor_speed_high_rate_time_ref_pub_ = this->create_publisher<sensor_msgs::msg::TimeReference>(
-    "motor_speed_high_rate/time_reference", rclcpp::SensorDataQoS());
+  pi_protocol_time_ref_pub_ = this->create_publisher<sensor_msgs::msg::TimeReference>(
+    "pi_protocol/time_reference", rclcpp::SensorDataQoS());
   attitude_pub_ = this->create_publisher<geometry_msgs::msg::QuaternionStamped>("attitude", 1);
   debug_motors_pub_ = this->create_publisher<as2_msgs::msg::UInt16MultiArrayStamped>(
     "debug/motors", 1);
@@ -256,9 +254,8 @@ BetaflightPlatform::BetaflightPlatform(const rclcpp::NodeOptions & options)
   box_names_ = fcu_.getBoxNames();
 
   if (pi_protocol_enable_) {
-    pi_protocol_client_.setImuCallback([this](const pi_IMU_t & imu) {onPiProtocolImu(imu);});
-    pi_protocol_client_.setMotorCallback(
-      [this](const pi_MOTOR_t & motor) {onPiProtocolMotor(motor);});
+    pi_protocol_client_.setEkfInputsCallback(
+      [this](const pi_EKF_INPUTS_t & msg) {onPiProtocolEkfInputs(msg);});
     if (!pi_protocol_client_.connect(pi_protocol_device_, pi_protocol_baudrate_)) {
       RCLCPP_ERROR(
         this->get_logger(),
@@ -467,31 +464,31 @@ void BetaflightPlatform::onImu(const msp::msg::RawImu & imu)
   imu_sensor_ptr_->updateAndPublish(imu_msg);
 }
 
-void BetaflightPlatform::onPiProtocolImu(const pi_IMU_t & imu)
+void BetaflightPlatform::onPiProtocolEkfInputs(const pi_EKF_INPUTS_t & msg)
 {
+  // Fixed-point decode, exact inverse of telemetry/pi.c's piSendEkfInputs()
+  // encode - matches pi-protocol's EKF_INPUTS.yaml field comments.
+  constexpr float kAccelLsbToMps2 = 9.81f / 2048.f;                        // +-16g full scale
+  constexpr float kGyroLsbToRadps = (2000.f * M_PI / 180.f) / 32768.f;     // +-2000 deg/s full scale
+
   // Captured first, right after piParse() hands off the struct, to keep the
   // clock-sync offset sample as tight as possible.
   const int64_t host_now_ns = this->get_clock()->now().nanoseconds();
-  const int64_t synced_ns = pi_protocol_clock_sync_.sync(imu.time_us, host_now_ns);
+  const int64_t synced_ns = pi_protocol_clock_sync_.sync(msg.time_us, host_now_ns);
   const rclcpp::Time stamp(synced_ns);
 
   sensor_msgs::msg::Imu imu_msg;
   imu_msg.header.stamp = stamp;
   imu_msg.header.frame_id = base_link_frame_id_;
-
-  // pi-protocol's IMU message already carries SI units (gyro rad/s, accel m/s^2)
-  // despite the roll/pitch/yaw field names - see indiflight/src/main/telemetry/pi.c.
-  // No scaling needed, unlike MSP RAW_IMU above.
-  imu_msg.angular_velocity.x = imu.roll;
-  imu_msg.angular_velocity.y = imu.pitch;
-  imu_msg.angular_velocity.z = imu.yaw;
-  imu_msg.linear_acceleration.x = imu.x;
-  imu_msg.linear_acceleration.y = imu.y;
-  imu_msg.linear_acceleration.z = imu.z;
-
-  // imu_gyro_covariance_/imu_accel_covariance_ are shared with the MSP raw_imu path
-  // (same physical IMU), but unlike that path this one must NOT apply the deg->rad
-  // conversion to the gyro covariance: pi-protocol's gyro is already in rad/s.
+  imu_msg.angular_velocity.x = msg.p * kGyroLsbToRadps;
+  imu_msg.angular_velocity.y = msg.q * kGyroLsbToRadps;
+  imu_msg.angular_velocity.z = msg.r * kGyroLsbToRadps;
+  imu_msg.linear_acceleration.x = msg.x * kAccelLsbToMps2;
+  imu_msg.linear_acceleration.y = msg.y * kAccelLsbToMps2;
+  imu_msg.linear_acceleration.z = msg.z * kAccelLsbToMps2;
+  // imu_gyro_covariance_/imu_accel_covariance_ are shared with the MSP raw_imu
+  // path (same physical IMU); no deg->rad conversion needed here, pi-protocol's
+  // gyro is already rad/s.
   imu_msg.angular_velocity_covariance[0] = imu_gyro_covariance_;
   imu_msg.angular_velocity_covariance[4] = imu_gyro_covariance_;
   imu_msg.angular_velocity_covariance[8] = imu_gyro_covariance_;
@@ -500,42 +497,31 @@ void BetaflightPlatform::onPiProtocolImu(const pi_IMU_t & imu)
   imu_msg.linear_acceleration_covariance[8] = imu_accel_covariance_;
   // Orientation not provided on this channel.
   imu_msg.orientation_covariance[0] = -1.0;
-
   imu_high_rate_pub_->publish(imu_msg);
-
-  // Raw FC time_us preserved alongside the corrected stamp - see
-  // PiProtocolClockSync for why time_us can't be used as header.stamp directly.
-  sensor_msgs::msg::TimeReference time_ref_msg;
-  time_ref_msg.header.stamp = stamp;
-  time_ref_msg.header.frame_id = base_link_frame_id_;
-  time_ref_msg.time_ref = rclcpp::Time(static_cast<int64_t>(imu.time_us) * 1000);
-  time_ref_msg.source = "indiflight_fc_micros";
-  imu_high_rate_time_ref_pub_->publish(time_ref_msg);
-}
-
-void BetaflightPlatform::onPiProtocolMotor(const pi_MOTOR_t & motor)
-{
-  const int64_t host_now_ns = this->get_clock()->now().nanoseconds();
-  const int64_t synced_ns = pi_protocol_clock_sync_.sync(motor.time_us, host_now_ns);
-  const rclcpp::Time stamp(synced_ns);
 
   sensor_msgs::msg::JointState motor_msg;
   motor_msg.header.stamp = stamp;
   motor_msg.header.frame_id = base_link_frame_id_;
   // Indexed in Betaflight's own mixer output order ([RR, FR, RL, FL], see
   // mixer_init.c mixerQuadX[]) - NOT the indi_controller/simulator convention
-  // ([FR, RR, RL, FL]) used elsewhere in the wider workspace.
+  // ([FR, RR, RL, FL]) used elsewhere in the wider workspace. omega1-4 are
+  // sent as plain rad/s with no scale factor (unlike x/y/z/p/q/r above).
   motor_msg.name = {"motor0", "motor1", "motor2", "motor3"};
-  motor_msg.velocity = {motor.omega0, motor.omega1, motor.omega2, motor.omega3};
-
+  motor_msg.velocity = {
+    static_cast<double>(msg.omega1), static_cast<double>(msg.omega2),
+    static_cast<double>(msg.omega3), static_cast<double>(msg.omega4)};
   motor_speed_high_rate_pub_->publish(motor_msg);
 
+  // Raw FC time_us preserved alongside the corrected stamp, shared by both
+  // topics above since they now always come from the same synchronized
+  // sample - see PiProtocolClockSync for why time_us can't be used as
+  // header.stamp directly.
   sensor_msgs::msg::TimeReference time_ref_msg;
   time_ref_msg.header.stamp = stamp;
   time_ref_msg.header.frame_id = base_link_frame_id_;
-  time_ref_msg.time_ref = rclcpp::Time(static_cast<int64_t>(motor.time_us) * 1000);
+  time_ref_msg.time_ref = rclcpp::Time(static_cast<int64_t>(msg.time_us) * 1000);
   time_ref_msg.source = "indiflight_fc_micros";
-  motor_speed_high_rate_time_ref_pub_->publish(time_ref_msg);
+  pi_protocol_time_ref_pub_->publish(time_ref_msg);
 }
 
 void BetaflightPlatform::onAltitude(const msp::msg::Altitude & altitude)
