@@ -41,7 +41,7 @@
 #include <string>
 #include <iostream>
 
-#include "as2_platform_indiflight/betaflight_platform.hpp"
+#include "as2_platform_indiflight/indiflight_platform.hpp"
 #include "msp/msp_msg.hpp"
 
 double convert_deg_s_to_rad_s(double deg_s)
@@ -59,7 +59,7 @@ void notImplemented()
 namespace as2_platform_indiflight
 {
 
-void BetaflightPlatform::readParameters()
+void IndiflightPlatform::readParameters()
 {
   this->declare_parameter<bool>("external_odom");
 
@@ -166,7 +166,7 @@ void BetaflightPlatform::readParameters()
 }
 
 
-BetaflightPlatform::BetaflightPlatform(const rclcpp::NodeOptions & options)
+IndiflightPlatform::IndiflightPlatform(const rclcpp::NodeOptions & options)
 : as2::AerialPlatform(options), thrust_map_(4)
 {
   readParameters();
@@ -241,7 +241,7 @@ BetaflightPlatform::BetaflightPlatform(const rclcpp::NodeOptions & options)
   publishDebugRc();
 }
 
-void BetaflightPlatform::configureSensors()
+void IndiflightPlatform::configureSensors()
 {
   imu_sensor_ptr_ = std::make_unique<as2::sensors::Imu>("imu", this);
   battery_sensor_ptr_ = std::make_unique<as2::sensors::Battery>("battery", this);
@@ -251,7 +251,7 @@ void BetaflightPlatform::configureSensors()
   //   std::make_unique<as2::sensors::Sensor<nav_msgs::msg::Odometry>>("odom", this);
 }
 
-bool BetaflightPlatform::ownSetArmingState(bool state)
+bool IndiflightPlatform::ownSetArmingState(bool state)
 {
   // ARM lives on the physical radio underneath indiflight's PI OVERRIDE mode,
   // permanently outside pi-protocol's 4-channel RC_OVERRIDE - this node can't
@@ -265,7 +265,7 @@ bool BetaflightPlatform::ownSetArmingState(bool state)
   return false;
 }
 
-bool BetaflightPlatform::ownSetOffboardControl(bool offboard)
+bool IndiflightPlatform::ownSetOffboardControl(bool offboard)
 {
   // Same reasoning as ownSetArmingState(): the PI OVERRIDE AUX switch lives on
   // the physical radio. Actual offboard (= PI_OVERRIDE_ACTIVE) state is read
@@ -278,7 +278,7 @@ bool BetaflightPlatform::ownSetOffboardControl(bool offboard)
   return false;
 }
 
-bool BetaflightPlatform::ownSetPlatformControlMode(const as2_msgs::msg::ControlMode & msg)
+bool IndiflightPlatform::ownSetPlatformControlMode(const as2_msgs::msg::ControlMode & msg)
 {
   // ONLY SUPPORTS ACRO MODE
   if (msg.control_mode != as2_msgs::msg::ControlMode::ACRO) {
@@ -288,7 +288,7 @@ bool BetaflightPlatform::ownSetPlatformControlMode(const as2_msgs::msg::ControlM
   return true;
 }
 
-bool BetaflightPlatform::ownSendCommand()
+bool IndiflightPlatform::ownSendCommand()
 {
   // ONLY ACRO MODE IS SUPPORTED
 
@@ -349,7 +349,7 @@ bool BetaflightPlatform::ownSendCommand()
   return true;
 }
 
-void BetaflightPlatform::ownKillSwitch()
+void IndiflightPlatform::ownKillSwitch()
 {
   // The hard-kill AUX channel this used to drive over MSP lives on the
   // physical radio now, outside pi-protocol's 4-channel RC_OVERRIDE - this
@@ -362,9 +362,9 @@ void BetaflightPlatform::ownKillSwitch()
     "Kill-switch is physical-radio-only on this platform - AS2 cannot cut motors from here.");
 }
 
-void BetaflightPlatform::ownStopPlatform() {RCLCPP_WARN(this->get_logger(), "NOT IMPLEMENTED");}
+void IndiflightPlatform::ownStopPlatform() {RCLCPP_WARN(this->get_logger(), "NOT IMPLEMENTED");}
 
-void BetaflightPlatform::onPiProtocolEkfInputs(const pi_EKF_INPUTS_t & msg)
+void IndiflightPlatform::onPiProtocolEkfInputs(const pi_EKF_INPUTS_t & msg)
 {
   // Fixed-point decode, exact inverse of telemetry/pi.c's piSendEkfInputs()
   // encode - matches pi-protocol's EKF_INPUTS.yaml field comments.
@@ -425,12 +425,12 @@ void BetaflightPlatform::onPiProtocolEkfInputs(const pi_EKF_INPUTS_t & msg)
   pi_protocol_time_ref_pub_->publish(time_ref_msg);
 }
 
-void BetaflightPlatform::onAltitude(const msp::msg::Altitude & altitude)
+void IndiflightPlatform::onAltitude(const msp::msg::Altitude & altitude)
 {
   std::cout << "Altitude: " << altitude << std::endl;
 }
 
-void BetaflightPlatform::onAttitude(const msp::msg::Attitude & attitude)
+void IndiflightPlatform::onAttitude(const msp::msg::Attitude & attitude)
 {
   geometry_msgs::msg::QuaternionStamped attitude_msg;
   attitude_msg.header.stamp = this->get_clock()->now();
@@ -452,7 +452,7 @@ void BetaflightPlatform::onAttitude(const msp::msg::Attitude & attitude)
   attitude_pub_->publish(attitude_msg);
 }
 
-void BetaflightPlatform::onMotor(const msp::msg::Motor & motor)
+void IndiflightPlatform::onMotor(const msp::msg::Motor & motor)
 {
   as2_msgs::msg::UInt16MultiArrayStamped debug_motor_msg;
   debug_motor_msg.layout.dim.resize(1);
@@ -467,7 +467,7 @@ void BetaflightPlatform::onMotor(const msp::msg::Motor & motor)
   debug_motors_pub_->publish(debug_motor_msg);
 }
 
-void BetaflightPlatform::onPiBattery(const pi_BATTERY_t & msg)
+void IndiflightPlatform::onPiBattery(const pi_BATTERY_t & msg)
 {
   float voltage_filtered = alpha_voltage_ * voltage_ + (1 - alpha_voltage_) * msg.voltage;
   float max_batt_voltage = max_cell_voltage_ * msg.cell_count;
@@ -487,7 +487,7 @@ void BetaflightPlatform::onPiBattery(const pi_BATTERY_t & msg)
   voltage_ = voltage_filtered;
 }
 
-void BetaflightPlatform::onPiStatus(const pi_PI_STATUS_t & msg)
+void IndiflightPlatform::onPiStatus(const pi_PI_STATUS_t & msg)
 {
   // Keep in sync with indiflight/src/main/telemetry/pi.h's PI_STATUS_FLAG_* macros.
   constexpr uint8_t kFlagArmed = 1 << 0;
@@ -498,12 +498,32 @@ void BetaflightPlatform::onPiStatus(const pi_PI_STATUS_t & msg)
   const bool override_active = msg.flags & kFlagPiOverrideActive;
   const bool rx_link_valid = msg.flags & kFlagRxLinkValid;
 
-  // Same upward-report pattern rcArm()/rcOffboard() used from an MSP RC-channel
-  // readback, just sourced from the FC's own status now. PI_OVERRIDE_ACTIVE is
-  // this platform's notion of offboard: it's the FC actually obeying this
-  // node's RC_OVERRIDE commands, not just a channel value this node last sent.
-  setArmingState(armed);
-  setOffboardControl(override_active);
+  // This reports FC-driven state - it must NOT go through
+  // setArmingState()/setOffboardControl() (as2_core::AerialPlatform). Those
+  // gate on ownSetArmingState()/ownSetOffboardControl(), which this platform
+  // deliberately always fails (arm/offboard are physical-radio-only - AS2
+  // cannot command them, see ownSetArmingState() above). Routing a *report*
+  // through that same gate means platform_info_msg_ could never actually
+  // reflect the FC's real state: ownSetArmingState() returning false is
+  // exactly what was silently blocking .armed from ever becoming true here,
+  // regardless of what PI_STATUS said. Update platform_info_msg_ directly
+  // instead - protected members, accessible from this derived class -
+  // replicating what setArmingState()/setOffboardControl() do on success.
+  //
+  // Edge-triggered on purpose too: PI_STATUS arrives continuously (~50Hz),
+  // and handleStateMachineEvent() isn't meant to be re-fired every tick for
+  // a state that hasn't changed.
+  if (armed != set_arm_) {
+    set_arm_ = armed;
+    platform_info_msg_.armed = armed;
+    handleStateMachineEvent(
+      armed ? as2_msgs::msg::PlatformStateMachineEvent::ARM :
+      as2_msgs::msg::PlatformStateMachineEvent::DISARM);
+  }
+  if (override_active != set_offboard_) {
+    set_offboard_ = override_active;
+    platform_info_msg_.offboard = override_active;
+  }
 
   as2_msgs::msg::UInt16MultiArrayStamped debug_msg;
   debug_msg.layout.dim.resize(1);
@@ -516,7 +536,7 @@ void BetaflightPlatform::onPiStatus(const pi_PI_STATUS_t & msg)
   debug_pi_status_pub_->publish(debug_msg);
 }
 
-void BetaflightPlatform::onRc(const msp::msg::Rc & rc)
+void IndiflightPlatform::onRc(const msp::msg::Rc & rc)
 {
   as2_msgs::msg::UInt16MultiArrayStamped debug_rc_msg;
   debug_rc_msg.layout.dim.resize(1);
@@ -534,7 +554,7 @@ void BetaflightPlatform::onRc(const msp::msg::Rc & rc)
   debug_rc_read_pub_->publish(debug_rc_msg);
 }
 
-void BetaflightPlatform::publishDebugRc()
+void IndiflightPlatform::publishDebugRc()
 {
   // Assign the values from `channel_values_` to the `debug_rc_` message
   debug_rc_command_.data = channel_values_;
@@ -544,7 +564,7 @@ void BetaflightPlatform::publishDebugRc()
   debug_rc_command_pub_->publish(debug_rc_command_);
 }
 
-void BetaflightPlatform::rcArm(int channel)
+void IndiflightPlatform::rcArm(int channel)
 {
   if (channel > 1500) {
     if (!set_arm_) {
@@ -561,7 +581,7 @@ void BetaflightPlatform::rcArm(int channel)
   }
 }
 
-void BetaflightPlatform::rcOffboard(int channel)
+void IndiflightPlatform::rcOffboard(int channel)
 {
   if (channel > 1500) {
     if (!set_offboard_) {

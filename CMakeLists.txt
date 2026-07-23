@@ -124,14 +124,14 @@ include_directories(
 
 # Set source files
 set(SOURCE_CPP_FILES
-  src/betaflight_platform.cpp
+  src/indiflight_platform.cpp
   src/pi_protocol_client.cpp
   src/pi_protocol_clock_sync.cpp
 )
 
 # Create the node executable
 add_executable(${PROJECT_NAME}_node
-  src/betaflight_platform_node.cpp
+  src/indiflight_platform_node.cpp
   ${SOURCE_CPP_FILES})
 
 target_link_libraries(${PROJECT_NAME}_node

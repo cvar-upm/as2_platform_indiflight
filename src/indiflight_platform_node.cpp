@@ -27,7 +27,7 @@
 // POSSIBILITY OF SUCH DAMAGE.
 
 /**
- * @file betaflight_platform_node.cpp
+ * @file indiflight_platform_node.cpp
  *
  * MavlinkPlatform node
  *
@@ -38,12 +38,12 @@
  */
 
 #include "as2_core/core_functions.hpp"
-#include "as2_platform_indiflight/betaflight_platform.hpp"
+#include "as2_platform_indiflight/indiflight_platform.hpp"
 
 int main(int argc, char * argv[])
 {
   rclcpp::init(argc, argv);
-  auto node = std::make_shared<as2_platform_indiflight::BetaflightPlatform>();
+  auto node = std::make_shared<as2_platform_indiflight::IndiflightPlatform>();
   node->preset_loop_frequency(300);
   as2::spinLoop(node);
 

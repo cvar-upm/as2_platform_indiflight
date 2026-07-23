@@ -27,15 +27,15 @@
 // POSSIBILITY OF SUCH DAMAGE.
 
 /**
- * @file betaflight_platform.hpp
+ * @file indiflight_platform.hpp
  *
- * BetaflightPlatform class definition
+ * IndiflightPlatform class definition
  *
  * @author Miguel Fernández Cortizas
  */
 
-#ifndef AS2_PLATFORM_INDIFLIGHT__BETAFLIGHT_PLATFORM_HPP_
-#define AS2_PLATFORM_INDIFLIGHT__BETAFLIGHT_PLATFORM_HPP_
+#ifndef AS2_PLATFORM_INDIFLIGHT__INDIFLIGHT_PLATFORM_HPP_
+#define AS2_PLATFORM_INDIFLIGHT__INDIFLIGHT_PLATFORM_HPP_
 
 #include <Eigen/Dense>
 
@@ -98,11 +98,11 @@ enum RC_CHANNELS
   YAW = 3
 };
 
-class BetaflightPlatform : public as2::AerialPlatform
+class IndiflightPlatform : public as2::AerialPlatform
 {
 public:
-  explicit BetaflightPlatform(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
-  ~BetaflightPlatform()
+  explicit IndiflightPlatform(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
+  ~IndiflightPlatform()
   {
     pi_protocol_client_.disconnect();
   }
@@ -315,4 +315,4 @@ private:
 
 }  // namespace as2_platform_indiflight
 
-#endif  // AS2_PLATFORM_INDIFLIGHT__BETAFLIGHT_PLATFORM_HPP_
+#endif  // AS2_PLATFORM_INDIFLIGHT__INDIFLIGHT_PLATFORM_HPP_
