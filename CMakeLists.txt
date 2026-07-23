@@ -48,7 +48,7 @@ if(NOT EXISTS ${LOCAL_PI_PROTOCOL_SRC}/config.yaml)
   fetchcontent_declare(
     pi_protocol_src
     GIT_REPOSITORY https://github.com/fjanguita/pi-protocol.git
-    GIT_TAG 8716ac035fb54bbfdbb02f85c329f4845426f882  # motor-telemetry-support: adds MOTOR message
+    GIT_TAG de8fa7fd41036ffa1734f458aef455dbae4305a8  # adds RC_OVERRIDE, PI_STATUS, BATTERY messages
     SOURCE_DIR ${LOCAL_PI_PROTOCOL_SRC}
   )
   fetchcontent_populate(pi_protocol_src)

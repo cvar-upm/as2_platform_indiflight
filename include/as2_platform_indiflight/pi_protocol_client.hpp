@@ -62,6 +62,8 @@ public:
   using ImuCallback = std::function<void (const pi_IMU_t &)>;
   using MotorCallback = std::function<void (const pi_MOTOR_t &)>;
   using EkfInputsCallback = std::function<void (const pi_EKF_INPUTS_t &)>;
+  using StatusCallback = std::function<void (const pi_PI_STATUS_t &)>;
+  using BatteryCallback = std::function<void (const pi_BATTERY_t &)>;
 
   PiProtocolClient() = default;
   ~PiProtocolClient();
@@ -103,8 +105,34 @@ public:
    */
   void setEkfInputsCallback(EkfInputsCallback callback) {ekf_inputs_callback_ = std::move(callback);}
 
+  /**
+   * @brief Set the callback invoked for every successfully parsed PI_STATUS
+   * message (armed / PI OVERRIDE active / rx link valid). Must be set before
+   * connect() to reliably receive the first messages.
+   */
+  void setStatusCallback(StatusCallback callback) {status_callback_ = std::move(callback);}
+
+  /**
+   * @brief Set the callback invoked for every successfully parsed BATTERY
+   * message. Must be set before connect() to reliably receive the first
+   * messages.
+   */
+  void setBatteryCallback(BatteryCallback callback) {battery_callback_ = std::move(callback);}
+
+  /**
+   * @brief Send an RC_OVERRIDE message - the roll/pitch/yaw/throttle stick
+   * override for indiflight's PI OVERRIDE box mode. Values follow
+   * Betaflight's usual 1000-2000 pulse convention. Only takes effect on the
+   * FC while PI OVERRIDE is active and the corresponding channel is enabled
+   * in pi_override_channels_mask.
+   * @return true on a successful write, false if not connected or the write
+   * failed.
+   */
+  bool sendRcOverride(uint16_t roll, uint16_t pitch, uint16_t yaw, uint16_t throttle);
+
 private:
   void readLoop();
+  bool sendMsg(void * msg_raw);
 
   int fd_ = -1;
   std::thread read_thread_;
@@ -112,6 +140,8 @@ private:
   ImuCallback imu_callback_;
   MotorCallback motor_callback_;
   EkfInputsCallback ekf_inputs_callback_;
+  StatusCallback status_callback_;
+  BatteryCallback battery_callback_;
   pi_parse_states_t parse_state_{};
 };
 

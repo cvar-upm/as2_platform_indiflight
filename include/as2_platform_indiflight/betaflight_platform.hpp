@@ -68,7 +68,9 @@
 #include "as2_core/polynomial_thrust_map.hpp"
 #include "as2_core/utils/frame_utils.hpp"
 
-#include <msp/FlightController.hpp>
+// msp_msg.hpp only, not FlightController.hpp: this node no longer connects
+// over MSP (see fcu_ removal), but the dormant MSP telemetry placeholders
+// below (onAltitude/onAttitude/onMotor/onRc) still use msp::msg:: types.
 #include <msp/msp_msg.hpp>
 
 #include "as2_platform_indiflight/pi_protocol_client.hpp"
@@ -82,19 +84,18 @@ namespace as2_platform_indiflight
 /**
  * @brief Enumeration of RC channel indices
  *
- * Defines the mapping between logical control inputs and RC channel indices.
+ * Defines the mapping between logical control inputs and the 4 channels
+ * carried by pi-protocol's RC_OVERRIDE message. ARM/OFFBOARD/killswitch are
+ * no longer sent by this node at all - they live permanently on the physical
+ * radio underneath indiflight's PI OVERRIDE box mode, which only ever
+ * overrides these 4 stick channels.
  */
 enum RC_CHANNELS
 {
   ROLL = 0,
   PITCH = 1,
   THROTTLE = 2,
-  YAW = 3,
-  ARM = 4,
-  OFFBOARD = 5,
-  KILLSWITCH = 6,
-  AUX4 = 7,
-  AUX5 = 8
+  YAW = 3
 };
 
 class BetaflightPlatform : public as2::AerialPlatform
@@ -103,7 +104,6 @@ public:
   explicit BetaflightPlatform(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
   ~BetaflightPlatform()
   {
-    fcu_.disconnect();
     pi_protocol_client_.disconnect();
   }
 
@@ -126,25 +126,12 @@ public:
   void ownStopPlatform() override;
 
 private:
-  // MSP Related functions and variables
-  std::string device_ = "/dev/ttyUSB0";
-  int baudrate_ = 115200;
-
-  fcu::FlightController fcu_;
-  /**
-   * @brief Callback for FCU status messages
-   */
-  void onStatus(const msp::msg::Status & status);
-
-  /**
-   * @brief Callback for FCU box names
-   */
-  void onBoxNames(const msp::msg::BoxNames & box_names);
-
-  /**
-   * @brief Callback for raw IMU data
-   */
-  void onImu(const msp::msg::RawImu & imu);
+  // Dormant MSP-based telemetry callbacks. MSP is no longer connected by this
+  // node (pi-protocol carries everything at runtime now - see onPiStatus/
+  // onPiBattery below), but these stay declared, unwired, as placeholders for
+  // pi-protocol equivalents that don't exist yet. onStatus/onBoxNames/onImu
+  // and the fcu_ connection itself were dropped outright: box names were
+  // never read anywhere, and pi-protocol's EKF_INPUTS already covers IMU.
 
   /**
    * @brief Callback for altitude data
@@ -162,19 +149,14 @@ private:
   void onMotor(const msp::msg::Motor & motor);
 
   /**
-   * @brief Callback for battery state
-   */
-  void onBattery(const msp::msg::BatteryState & battery);
-
-  /**
    * @brief Callback for RC reads from the controller
    */
   void onRc(const msp::msg::Rc & rc);
 
-  // pi-protocol related functions and variables (indiflight's high-rate telemetry
-  // channel, independent of MSP - a connect failure here must stay non-fatal so a
-  // bad second UART can never prevent flight control from starting)
-  bool pi_protocol_enable_ = false;
+  // pi-protocol related functions and variables (indiflight's telemetry/command
+  // channel - now the only link this node depends on at runtime. A connect
+  // failure here is fatal, unlike the old MSP-optional framing this replaced).
+  bool pi_protocol_enable_ = true;
   std::string pi_protocol_device_ = "/dev/ttyUSB1";
   int pi_protocol_baudrate_ = 921600;
   PiProtocolClient pi_protocol_client_;
@@ -192,6 +174,23 @@ private:
    * exposed to ROS consumers. Up to 2kHz.
    */
   void onPiProtocolEkfInputs(const pi_EKF_INPUTS_t & msg);
+
+  /**
+   * @brief Callback for pi-protocol PI_STATUS messages: armed / PI OVERRIDE
+   * active / rx link valid, reported by the FC at TELEMETRY_PI_MAXRATE.
+   * Feeds AS2's own arming/offboard state the same way rcArm()/rcOffboard()
+   * used to from an MSP RC-channel readback - PI_OVERRIDE_ACTIVE plays the
+   * role OFFBOARD used to: it's the FC actually obeying this node's stick
+   * commands, not just a channel value this node itself last sent.
+   */
+  void onPiStatus(const pi_PI_STATUS_t & msg);
+
+  /**
+   * @brief Callback for pi-protocol BATTERY messages: pack voltage/current/
+   * cell count, replacing the MSP battery message as the source for
+   * voltage_ (used by the voltage-aware thrust map).
+   */
+  void onPiBattery(const pi_BATTERY_t & msg);
 
   void computeControlSlopes()
   {
@@ -213,26 +212,17 @@ private:
 
   void initChannels()
   {
-    // channels are :
-    // - 0 roll,
-    // - 1 pitch,
-    // - 2 throttle,
-    // - 3 yaw,
-    // - 4 aux1 ( ARM ) ,
-    // - 5 aux2 ( OFFBOARD ),
-    // - 6 aux3 ( KILLSWITCH ),
-    // - 7 aux4
-    // - 8 aux5
-    // roll, pitch and yaw are set to 1500, throttle to 1000, and the rest to 1000
+    // channels are : 0 roll, 1 pitch, 2 throttle, 3 yaw - the 4 channels
+    // pi-protocol's RC_OVERRIDE carries. ARM/OFFBOARD/killswitch live on the
+    // physical radio now, outside this vector entirely.
     channel_values_.clear();
-    channel_values_.resize(8, 1000);
+    channel_values_.resize(4, 1000);
     channel_values_[RC_CHANNELS::ROLL] = 1500;
     channel_values_[RC_CHANNELS::PITCH] = 1500;
     channel_values_[RC_CHANNELS::THROTTLE] = 1000;
     channel_values_[RC_CHANNELS::YAW] = 1500;
   }
 
-  double imu_hz_ = 0.0;
   double imu_gyro_covariance_ = 0.0;
   double imu_accel_covariance_ = 0.0;
   double imu_orientation_covariance_ = 0.0;
@@ -274,8 +264,6 @@ private:
   std::string base_link_frame_id_;
   std::string odom_frame_id_;
 
-  std::map<std::string, std::size_t> box_names_;
-
   std::unique_ptr<as2::sensors::Imu> imu_sensor_ptr_;
   std::unique_ptr<as2::sensors::Sensor<sensor_msgs::msg::BatteryState>> battery_sensor_ptr_;
   std::unique_ptr<as2::sensors::Sensor<nav_msgs::msg::Odometry>> odometry_raw_estimation_ptr_;
@@ -290,7 +278,6 @@ private:
   // Debug rc publisher
   rclcpp::Publisher<as2_msgs::msg::UInt16MultiArrayStamped>::SharedPtr debug_rc_command_pub_;
   rclcpp::Publisher<as2_msgs::msg::UInt16MultiArrayStamped>::SharedPtr debug_rc_read_pub_;
-  rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr raw_imu_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_high_rate_pub_;
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr motor_speed_high_rate_pub_;
   // Single publisher: imu_high_rate and motor_speed_high_rate now always
@@ -299,6 +286,8 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::TimeReference>::SharedPtr pi_protocol_time_ref_pub_;
   rclcpp::Publisher<geometry_msgs::msg::QuaternionStamped>::SharedPtr attitude_pub_;
   rclcpp::Publisher<as2_msgs::msg::UInt16MultiArrayStamped>::SharedPtr debug_motors_pub_;
+  // [armed, pi_override_active, rx_link_valid] as 0/1, decoded from PI_STATUS.flags.
+  rclcpp::Publisher<as2_msgs::msg::UInt16MultiArrayStamped>::SharedPtr debug_pi_status_pub_;
   as2_msgs::msg::UInt16MultiArrayStamped debug_rc_command_;
 
   /**
@@ -307,14 +296,17 @@ private:
   void publishDebugRc();
 
   /**
-   * @brief Set RC arm channel
+   * @brief Set RC arm channel. Dead code now that MSP is disconnected (no
+   * onRc() caller left to feed it) - kept alongside onRc() as a placeholder,
+   * see the comment above onAltitude(). Superseded by onPiStatus().
    *
    * @param arm Arm value
    */
   void rcArm(int arm);
 
   /**
-   * @brief Set RC offboard channel
+   * @brief Set RC offboard channel. Dead code, same reasoning as rcArm().
+   * Superseded by onPiStatus().
    *
    * @param offboard Offboard value
    */

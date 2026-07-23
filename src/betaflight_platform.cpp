@@ -61,17 +61,15 @@ namespace as2_platform_indiflight
 
 void BetaflightPlatform::readParameters()
 {
-  this->declare_parameter<std::string>("device");
-  this->declare_parameter<int>("baudrate");
   this->declare_parameter<bool>("external_odom");
 
-  // pi-protocol config parameters (indiflight high-rate telemetry, separate UART from MSP)
+  // pi-protocol config parameters - the only serial link this node depends on
+  // at runtime now (see the constructor's connect() call).
   this->declare_parameter<bool>("pi_protocol.enable", pi_protocol_enable_);
   this->declare_parameter<std::string>("pi_protocol.device", pi_protocol_device_);
   this->declare_parameter<int>("pi_protocol.baudrate", pi_protocol_baudrate_);
 
-  // IMU config parameters
-  this->declare_parameter<float>("imu.frequency");
+  // IMU covariance parameters, used by onPiProtocolEkfInputs().
   this->declare_parameter<float>("imu.covariance.gyro");
   this->declare_parameter<float>("imu.covariance.accel");
   this->declare_parameter<float>("imu.covariance.orientation");
@@ -108,15 +106,12 @@ void BetaflightPlatform::readParameters()
   base_link_frame_id_ = as2::tf::generateTfName(this, "base_link");
   odom_frame_id_ = as2::tf::generateTfName(this, "odom");
 
-  device_ = this->get_parameter("device").as_string();
-  baudrate_ = this->get_parameter("baudrate").as_int();
   external_odom_ = this->get_parameter("external_odom").as_bool();
 
   pi_protocol_enable_ = this->get_parameter("pi_protocol.enable").as_bool();
   pi_protocol_device_ = this->get_parameter("pi_protocol.device").as_string();
   pi_protocol_baudrate_ = this->get_parameter("pi_protocol.baudrate").as_int();
 
-  imu_hz_ = this->get_parameter("imu.frequency").as_double();
   imu_gyro_covariance_ = this->get_parameter("imu.covariance.gyro").as_double();
   imu_accel_covariance_ = this->get_parameter("imu.covariance.accel").as_double();
   imu_orientation_covariance_ = this->get_parameter("imu.covariance.orientation").as_double();
@@ -148,8 +143,9 @@ void BetaflightPlatform::readParameters()
   limit_yaw_percent_ = this->get_parameter("limit_yaw_percent").as_double();
   limit_thrust_percent_ = this->get_parameter("limit_thrust_percent").as_double();
 
-  RCLCPP_INFO(this->get_logger(), "Device: %s", device_.c_str());
-  RCLCPP_INFO(this->get_logger(), "Baudrate: %d", baudrate_);
+  RCLCPP_INFO(
+    this->get_logger(), "pi-protocol device: %s @ %d baud",
+    pi_protocol_device_.c_str(), pi_protocol_baudrate_);
   RCLCPP_INFO(this->get_logger(), "External odometry mode: %s", external_odom_ ? "true" : "false");
   RCLCPP_INFO(
     this->get_logger(), "Simulation mode: %s",
@@ -184,22 +180,13 @@ BetaflightPlatform::BetaflightPlatform(const rclcpp::NodeOptions & options)
       "Thrust map disabled. Thrust will be mapped directly to throttle.");
   }
 
-  auto out = fcu_.connect(device_, baudrate_, 0.0, true);
-  if (!out) {
-    RCLCPP_ERROR(this->get_logger(), "Could not connect to device %s", device_.c_str());
-    throw std::runtime_error("Could not connect to device");
-  }
-  fcu_.setLoggingLevel(msp::client::LoggingLevel::INFO);
-  fcu_.setControlSource(fcu::ControlSource::MSP);
-
-  // Create all publishers BEFORE starting any subscriptions.
-  // subscribe() starts a timer thread that fires immediately on an already-open
-  // port, so any publisher used in a callback must exist before the matching
-  // subscribe() call returns, otherwise the first response races with
+  // Create all publishers BEFORE starting any subscriptions/connections.
+  // pi_protocol_client_.connect() starts a reader thread that can invoke
+  // callbacks immediately, so any publisher used in a callback must exist
+  // before connect() returns, otherwise the first message races with
   // publisher construction and causes a null-dereference crash.
   debug_rc_command_pub_ = this->create_publisher<as2_msgs::msg::UInt16MultiArrayStamped>(
     "debug/rc/command", 1);
-  raw_imu_pub_ = this->create_publisher<sensor_msgs::msg::Imu>("raw_imu", 1);
   imu_high_rate_pub_ = this->create_publisher<sensor_msgs::msg::Imu>(
     "imu_high_rate", rclcpp::SensorDataQoS());
   motor_speed_high_rate_pub_ = this->create_publisher<sensor_msgs::msg::JointState>(
@@ -209,64 +196,37 @@ BetaflightPlatform::BetaflightPlatform(const rclcpp::NodeOptions & options)
   attitude_pub_ = this->create_publisher<geometry_msgs::msg::QuaternionStamped>("attitude", 1);
   debug_motors_pub_ = this->create_publisher<as2_msgs::msg::UInt16MultiArrayStamped>(
     "debug/motors", 1);
+  debug_pi_status_pub_ = this->create_publisher<as2_msgs::msg::UInt16MultiArrayStamped>(
+    "debug/pi_status", 1);
   if (rc_hz_ > 0.0) {
     debug_rc_read_pub_ = this->create_publisher<as2_msgs::msg::UInt16MultiArrayStamped>(
       "debug/rc/read", 1);
   }
 
-  fcu_.subscribe(&BetaflightPlatform::onStatus, this, 1);
-  if (imu_hz_ > 0.0) {
-    fcu_.subscribe(&BetaflightPlatform::onImu, this, 1.0 / imu_hz_);
-  } else {
-    RCLCPP_WARN(this->get_logger(), "IMU frequency is set to 0, IMU data will not be published");
-  }
-  if (battery_hz_ > 0.0) {
-    fcu_.subscribe(&BetaflightPlatform::onBattery, this, 1.0 / battery_hz_);
-  } else {
-    RCLCPP_WARN(
-      this->get_logger(), "Battery frequency is set to 0, battery data will not be published");
-  }
-  if (attitude_hz_ > 0.0) {
-    fcu_.subscribe(&BetaflightPlatform::onAttitude, this, 1.0 / attitude_hz_);
-  } else {
-    RCLCPP_WARN(
-      this->get_logger(), "Attitude frequency is set to 0, attitude data will not be published");
-  }
-  if (altitude_hz_ > 0.0) {
-    fcu_.subscribe(&BetaflightPlatform::onAltitude, this, 1.0 / altitude_hz_);
-  } else {
-    RCLCPP_WARN(
-      this->get_logger(), "Altitude frequency is set to 0, altitude data will not be published");
-  }
-  if (motor_hz_ > 0.0) {
-    fcu_.subscribe(&BetaflightPlatform::onMotor, this, 1.0 / motor_hz_);
-  } else {
-    RCLCPP_WARN(
-      this->get_logger(),
-      "Motor frequency is set to 0, motor throttle data will not be published");
-  }
-  if (rc_hz_ > 0.0) {
-    fcu_.subscribe(&BetaflightPlatform::onRc, this, 1.0 / rc_hz_);
-  } else {
-    RCLCPP_WARN(
-      this->get_logger(), "RC frequency is set to 0, RC data will not be published");
-  }
-  box_names_ = fcu_.getBoxNames();
-
+  // pi-protocol is now the only link this node depends on at runtime: RC_OVERRIDE
+  // commands, and PI_STATUS/BATTERY telemetry for arm/offboard state and thrust-map
+  // voltage correction. Unlike the old MSP-optional framing this replaced, a
+  // connect failure here is fatal - there is no other command/state link left.
   if (pi_protocol_enable_) {
     pi_protocol_client_.setEkfInputsCallback(
       [this](const pi_EKF_INPUTS_t & msg) {onPiProtocolEkfInputs(msg);});
+    pi_protocol_client_.setStatusCallback(
+      [this](const pi_PI_STATUS_t & msg) {onPiStatus(msg);});
+    pi_protocol_client_.setBatteryCallback(
+      [this](const pi_BATTERY_t & msg) {onPiBattery(msg);});
     if (!pi_protocol_client_.connect(pi_protocol_device_, pi_protocol_baudrate_)) {
       RCLCPP_ERROR(
-        this->get_logger(),
-        "Could not connect to pi-protocol device %s - continuing without high-rate IMU/motor data",
+        this->get_logger(), "Could not connect to pi-protocol device %s",
         pi_protocol_device_.c_str());
-      // Non-fatal on purpose: a bad second UART must not prevent flight control from starting.
-    } else {
-      RCLCPP_INFO(
-        this->get_logger(), "pi-protocol connected on %s @ %d baud",
-        pi_protocol_device_.c_str(), pi_protocol_baudrate_);
+      throw std::runtime_error("Could not connect to pi-protocol device");
     }
+    RCLCPP_INFO(
+      this->get_logger(), "pi-protocol connected on %s @ %d baud",
+      pi_protocol_device_.c_str(), pi_protocol_baudrate_);
+  } else {
+    RCLCPP_WARN(
+      this->get_logger(),
+      "pi_protocol.enable is false - this node has no command/state link to the FC.");
   }
 
   // Clear layout dimensions if they were set in a previous publication
@@ -293,20 +253,29 @@ void BetaflightPlatform::configureSensors()
 
 bool BetaflightPlatform::ownSetArmingState(bool state)
 {
-  // TODO(miferco97): check if this is correct
-  // NOTE: arming here goes through the RC ARM channel (MSP_SET_RAW_RC), not
-  // MSP_SET_ARMING_DISABLED. On indiflight, MSP_SET_ARMING_DISABLED no longer
-  // persistently blocks future arming (it only disarms if currently armed) -
-  // see indiflight/src/main/msp/msp.c, ARMING_DISABLED_MSP is commented out.
-  // Don't assume that command is a standing safety interlock on this firmware.
-  int value = state ? 1 : 0;
-  channel_values_[RC_CHANNELS::ARM] = 1000 + value * 1000;
-  return true;
+  // ARM lives on the physical radio underneath indiflight's PI OVERRIDE mode,
+  // permanently outside pi-protocol's 4-channel RC_OVERRIDE - this node can't
+  // set it. Actual arm state is read back from the FC via PI_STATUS and
+  // reported upward from onPiStatus(), independent of this call's return value.
+  RCLCPP_WARN(
+    this->get_logger(),
+    "Arming is physical-radio-controlled on this platform - AS2 cannot arm/disarm it. "
+    "Actual arm state is reported via pi-protocol PI_STATUS.");
+  (void)state;
+  return false;
 }
 
 bool BetaflightPlatform::ownSetOffboardControl(bool offboard)
 {
-  return true;
+  // Same reasoning as ownSetArmingState(): the PI OVERRIDE AUX switch lives on
+  // the physical radio. Actual offboard (= PI_OVERRIDE_ACTIVE) state is read
+  // back via PI_STATUS in onPiStatus().
+  RCLCPP_WARN(
+    this->get_logger(),
+    "Offboard is driven by the PI OVERRIDE AUX switch on the physical radio - AS2 cannot set "
+    "it. Actual state is reported via pi-protocol PI_STATUS.");
+  (void)offboard;
+  return false;
 }
 
 bool BetaflightPlatform::ownSetPlatformControlMode(const as2_msgs::msg::ControlMode & msg)
@@ -372,9 +341,9 @@ bool BetaflightPlatform::ownSendCommand()
 
   publishDebugRc();
 
-  bool out = fcu_.setRc(channel_values_);
+  bool out = pi_protocol_client_.sendRcOverride(roll_pulse, pitch_pulse, yaw_pulse, throttle_pulse);
   if (!out) {
-    RCLCPP_ERROR(this->get_logger(), "Could not send command to flight controller");
+    RCLCPP_ERROR(this->get_logger(), "Could not send RC_OVERRIDE to flight controller");
     return false;
   }
   return true;
@@ -382,87 +351,18 @@ bool BetaflightPlatform::ownSendCommand()
 
 void BetaflightPlatform::ownKillSwitch()
 {
-  // set all channels to 0
-  std::fill(channel_values_.begin(), channel_values_.end(), 1000);
-
-  channel_values_[RC_CHANNELS::KILLSWITCH] = 2000;
-  while (true) {
-    fcu_.setRc(channel_values_);
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-  }
+  // The hard-kill AUX channel this used to drive over MSP lives on the
+  // physical radio now, outside pi-protocol's 4-channel RC_OVERRIDE - this
+  // node has no way to guarantee a motor cut. Not attempting a best-effort
+  // "throttle to minimum" here on purpose: with idle-throttle/airmode that
+  // wouldn't actually stop the motors, and sending it could read as a real
+  // kill when it isn't one. Real kill authority stays with the safety pilot.
+  RCLCPP_WARN(
+    this->get_logger(),
+    "Kill-switch is physical-radio-only on this platform - AS2 cannot cut motors from here.");
 }
 
 void BetaflightPlatform::ownStopPlatform() {RCLCPP_WARN(this->get_logger(), "NOT IMPLEMENTED");}
-
-void BetaflightPlatform::onStatus(const msp::msg::Status & status)
-{
-  // Betaflight never sets the GeneralHealth bit (bit 15) in the sensor flags,
-  // so status.isHealthy() is always false. Check SENSOR_ACC (bit 0) instead:
-  // Betaflight reports this bit whenever the IMU accelerometer is initialised.
-  if (!status.hasAccelerometer()) {
-    RCLCPP_WARN(this->get_logger(), "Flight controller is not healthy");
-  }
-}
-
-void BetaflightPlatform::onImu(const msp::msg::RawImu & imu)
-{
-  std_msgs::msg::Header hdr;
-  hdr.stamp = this->get_clock()->now();
-  hdr.frame_id = base_link_frame_id_;
-
-  // Publish raw IMU message
-  sensor_msgs::msg::Imu imu_raw;
-  imu_raw.header = hdr;
-  imu_raw.linear_acceleration.x = imu.acc[0];
-  imu_raw.linear_acceleration.y = imu.acc[1];
-  imu_raw.linear_acceleration.z = imu.acc[2];
-  imu_raw.angular_velocity.x = imu.gyro[0] / 180.0 * M_PI;
-  imu_raw.angular_velocity.y = imu.gyro[1] / 180.0 * M_PI;
-  imu_raw.angular_velocity.z = imu.gyro[2] / 180.0 * M_PI;
-
-  raw_imu_pub_->publish(imu_raw);
-
-  // from Betaflight MPU6000 drivers init: acc_1G = 512.0 * 4
-  // const msp::msg::ImuSI imu_si(imu, 512.0 * 4, 1.0 / 4.096, 0.092, 9.80665);
-  const double acc_1G = 512.0f;
-  const double gyro_scale = 1.0f / 16.0f;
-  const msp::msg::ImuSI imu_si(imu, acc_1G, gyro_scale, 0.092, 9.80665);
-
-  // raw imu data without orientation
-  sensor_msgs::msg::Imu imu_msg;
-  imu_msg.header = hdr;
-  imu_msg.linear_acceleration.x = imu_si.acc[0];
-  imu_msg.linear_acceleration.y = imu_si.acc[1];
-  imu_msg.linear_acceleration.z = imu_si.acc[2];
-  imu_msg.angular_velocity.x = imu_si.gyro[0] / 180.0 * M_PI;
-  imu_msg.angular_velocity.y = imu_si.gyro[1] / 180.0 * M_PI;
-  imu_msg.angular_velocity.z = imu_si.gyro[2] / 180.0 * M_PI;
-
-  std::array<double, 9> gyro_covariance =
-  {imu_gyro_covariance_ / 180.0 * M_PI, 0.0, 0.0,
-    0.0, imu_gyro_covariance_ / 180.0 * M_PI, 0.0,
-    0.0, 0.0, imu_gyro_covariance_ / 180.0 * M_PI};
-  std::array<double, 9> accel_covariance =
-  {imu_accel_covariance_, 0.0, 0.0,
-    0.0, imu_accel_covariance_, 0.0,
-    0.0, 0.0, imu_accel_covariance_};
-  std::array<double, 9> ori_covariance =
-  {imu_orientation_covariance_, 0.0, 0.0,
-    0.0, imu_orientation_covariance_, 0.0,
-    0.0, 0.0, imu_orientation_covariance_};
-  imu_msg.angular_velocity_covariance = gyro_covariance;
-  imu_msg.linear_acceleration_covariance = accel_covariance;
-  imu_msg.orientation_covariance = ori_covariance;
-
-  // magnetic field vector
-  // sensor_msgs::msg::MagneticField mag_msg;
-  // mag_msg.header = hdr;
-  // mag_msg.magnetic_field.x = imu_si.mag[0] * 1e-6;
-  // mag_msg.magnetic_field.y = imu_si.mag[1] * 1e-6;
-  // mag_msg.magnetic_field.z = imu_si.mag[2] * 1e-6;
-
-  imu_sensor_ptr_->updateAndPublish(imu_msg);
-}
 
 void BetaflightPlatform::onPiProtocolEkfInputs(const pi_EKF_INPUTS_t & msg)
 {
@@ -486,9 +386,7 @@ void BetaflightPlatform::onPiProtocolEkfInputs(const pi_EKF_INPUTS_t & msg)
   imu_msg.linear_acceleration.x = msg.x * kAccelLsbToMps2;
   imu_msg.linear_acceleration.y = msg.y * kAccelLsbToMps2;
   imu_msg.linear_acceleration.z = msg.z * kAccelLsbToMps2;
-  // imu_gyro_covariance_/imu_accel_covariance_ are shared with the MSP raw_imu
-  // path (same physical IMU); no deg->rad conversion needed here, pi-protocol's
-  // gyro is already rad/s.
+  // no deg->rad conversion needed here, pi-protocol's gyro is already rad/s.
   imu_msg.angular_velocity_covariance[0] = imu_gyro_covariance_;
   imu_msg.angular_velocity_covariance[4] = imu_gyro_covariance_;
   imu_msg.angular_velocity_covariance[8] = imu_gyro_covariance_;
@@ -498,6 +396,9 @@ void BetaflightPlatform::onPiProtocolEkfInputs(const pi_EKF_INPUTS_t & msg)
   // Orientation not provided on this channel.
   imu_msg.orientation_covariance[0] = -1.0;
   imu_high_rate_pub_->publish(imu_msg);
+  // Also feeds AS2's standard sensor_measurements/imu topic (used by AS2's
+  // state estimator) - this used to come from the now-removed MSP onImu().
+  imu_sensor_ptr_->updateAndPublish(imu_msg);
 
   sensor_msgs::msg::JointState motor_msg;
   motor_msg.header.stamp = stamp;
@@ -566,23 +467,53 @@ void BetaflightPlatform::onMotor(const msp::msg::Motor & motor)
   debug_motors_pub_->publish(debug_motor_msg);
 }
 
-void BetaflightPlatform::onBattery(const msp::msg::BatteryState & battery)
+void BetaflightPlatform::onPiBattery(const pi_BATTERY_t & msg)
 {
-  float voltage_filtered = alpha_voltage_ * voltage_ + (1 - alpha_voltage_) * battery.voltage;
-  float max_batt_voltage = max_cell_voltage_ * battery.cell_count;
-  float min_batt_voltage = min_cell_voltage_ * battery.cell_count;
+  float voltage_filtered = alpha_voltage_ * voltage_ + (1 - alpha_voltage_) * msg.voltage;
+  float max_batt_voltage = max_cell_voltage_ * msg.cell_count;
+  float min_batt_voltage = min_cell_voltage_ * msg.cell_count;
 
   sensor_msgs::msg::BatteryState battery_msg;
   battery_msg.header.stamp = this->get_clock()->now();
   battery_msg.voltage = voltage_filtered;
-  battery_msg.current = battery.amperage;
+  battery_msg.current = msg.current;
   battery_msg.percentage = (voltage_filtered - min_batt_voltage) /
     (max_batt_voltage - min_batt_voltage);
-  battery_msg.charge = battery.capacity_mAh;
+  // No wire equivalent of MSP's battery.capacity_mAh (a static config value on
+  // the FC, not telemetry) - battery_msg.charge is left at its default.
 
   battery_sensor_ptr_->updateData(battery_msg);
 
   voltage_ = voltage_filtered;
+}
+
+void BetaflightPlatform::onPiStatus(const pi_PI_STATUS_t & msg)
+{
+  // Keep in sync with indiflight/src/main/telemetry/pi.h's PI_STATUS_FLAG_* macros.
+  constexpr uint8_t kFlagArmed = 1 << 0;
+  constexpr uint8_t kFlagPiOverrideActive = 1 << 1;
+  constexpr uint8_t kFlagRxLinkValid = 1 << 2;
+
+  const bool armed = msg.flags & kFlagArmed;
+  const bool override_active = msg.flags & kFlagPiOverrideActive;
+  const bool rx_link_valid = msg.flags & kFlagRxLinkValid;
+
+  // Same upward-report pattern rcArm()/rcOffboard() used from an MSP RC-channel
+  // readback, just sourced from the FC's own status now. PI_OVERRIDE_ACTIVE is
+  // this platform's notion of offboard: it's the FC actually obeying this
+  // node's RC_OVERRIDE commands, not just a channel value this node last sent.
+  setArmingState(armed);
+  setOffboardControl(override_active);
+
+  as2_msgs::msg::UInt16MultiArrayStamped debug_msg;
+  debug_msg.layout.dim.resize(1);
+  debug_msg.layout.dim[0].size = 3;
+  debug_msg.layout.dim[0].label = "armed,pi_override_active,rx_link_valid";
+  debug_msg.data = {
+    static_cast<uint16_t>(armed), static_cast<uint16_t>(override_active),
+    static_cast<uint16_t>(rx_link_valid)};
+  debug_msg.stamp = this->now();
+  debug_pi_status_pub_->publish(debug_msg);
 }
 
 void BetaflightPlatform::onRc(const msp::msg::Rc & rc)

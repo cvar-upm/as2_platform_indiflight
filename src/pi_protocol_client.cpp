@@ -35,6 +35,7 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <iostream>
 
@@ -154,9 +155,40 @@ void PiProtocolClient::readLoop()
         ekf_inputs_callback_)
       {
         ekf_inputs_callback_(*piMsgEkfInputsRx);
+      } else if (msg_id == PI_MSG_PI_STATUS_ID && piMsgPiStatusRx != nullptr && status_callback_) {
+        status_callback_(*piMsgPiStatusRx);
+      } else if (msg_id == PI_MSG_BATTERY_ID && piMsgBatteryRx != nullptr && battery_callback_) {
+        battery_callback_(*piMsgBatteryRx);
       }
     }
   }
+}
+
+bool PiProtocolClient::sendMsg(void * msg_raw)
+{
+  if (fd_ < 0) {
+    return false;
+  }
+
+  // Same wasting-some-stack sizing piSendMsg() uses firmware-side.
+  uint8_t buf[2 * PI_MAX_PACKET_LEN];
+  const unsigned int num_bytes = piAccumulateMsg(msg_raw, buf);
+
+  const ssize_t written = ::write(fd_, buf, num_bytes);
+  return written == static_cast<ssize_t>(num_bytes);
+}
+
+bool PiProtocolClient::sendRcOverride(uint16_t roll, uint16_t pitch, uint16_t yaw, uint16_t throttle)
+{
+  piMsgRcOverrideTx.time_us = static_cast<uint32_t>(
+    std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count());
+  piMsgRcOverrideTx.roll = roll;
+  piMsgRcOverrideTx.pitch = pitch;
+  piMsgRcOverrideTx.yaw = yaw;
+  piMsgRcOverrideTx.throttle = throttle;
+
+  return sendMsg(&piMsgRcOverrideTx);
 }
 
 }  // namespace as2_platform_indiflight

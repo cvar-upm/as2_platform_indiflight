@@ -3,23 +3,22 @@
     cmd_freq: 100.0  # Hz of platform commands send
     info_freq: 10.0  # Hz of platform info publish
     external_odom: false  # Flag to use external odometry source
-    device: "/dev/ttyTHS1"  # Serial port to connect to the Platform
-    baudrate: 115200 # Baudrate of the serial port
     pi_protocol:
-      enable: false  # Set to true once the second UART is wired and configured on the FC
-      device: "/dev/ttyTHS2"  # Dedicated UART for indiflight's pi-protocol telemetry (NOT the MSP port above)
+      enable: true  # This node's only link to the FC - a failed connection is fatal
+      device: "/dev/ttyTHS1"  # UART for indiflight's pi-protocol (RC_OVERRIDE/PI_STATUS/BATTERY/telemetry)
       baudrate: 921600  # Matches indiflight's BAUD_AUTO default for FUNCTION_TELEMETRY_PI
     imu:
-      frequency: 0.0  # Frequency of IMU measures publication
       covariance:
         gyro: 0.0  # IMU gyroscope mean noise (set to 0 for not calibrated)
         accel: 0.0  # IMU accelerometer mean noise (set to 0 for not calibrated)
         orientation: 0.0 # IMU orientation mean noise (set to 0 for not calibrated)
-    battery_hz: 0.0  # Frequency of battery measures publication
-    altitude_hz: 0.0  # Frequency of altitude measures publication (set to 0 to disable publication)
-    attitude_hz: 0.0  # Frequency of attitude measures publication (set to 0 to disable publication)
-    rc_hz: 0.0  # Frequency of RC measures publication (set to 0 to disable publication)
-    motor_hz: 0.0  # Frequency of motor individual throttles measures publication
+    # battery_hz/altitude_hz/attitude_hz/rc_hz/motor_hz: reserved for future pi-protocol
+    # telemetry equivalents. MSP is not used by this node, so these currently do nothing.
+    battery_hz: 0.0
+    altitude_hz: 0.0
+    attitude_hz: 0.0
+    rc_hz: 0.0
+    motor_hz: 0.0
     alpha_voltage: 0.0  # Filter for battery voltage measurements
     min_cell_voltage: 3.7  # Security voltage level for LiPO cells (V)
     max_cell_voltage: 4.2  # Maximum cell charge (V)
