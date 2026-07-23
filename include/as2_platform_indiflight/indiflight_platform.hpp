@@ -169,9 +169,9 @@ private:
   /**
    * @brief Callback for pi-protocol EKF_INPUTS messages: a single synchronized
    * bundle (accel + gyro + all 4 motor speeds, one sample each, one time_us),
-   * republished here as separate imu_high_rate/motor_speed_high_rate topics -
-   * the synchronization only needs to happen on the wire, not in how it's
-   * exposed to ROS consumers. Up to 2kHz.
+   * republished here as sensor_measurements/imu and
+   * sensor_measurements/motor_angular_speed - the synchronization only needs
+   * to happen on the wire, not in how it's exposed to ROS consumers. Up to 2kHz.
    */
   void onPiProtocolEkfInputs(const pi_EKF_INPUTS_t & msg);
 
@@ -266,6 +266,10 @@ private:
 
   std::unique_ptr<as2::sensors::Imu> imu_sensor_ptr_;
   std::unique_ptr<as2::sensors::Sensor<sensor_msgs::msg::BatteryState>> battery_sensor_ptr_;
+  // Publishes to sensor_measurements/motor_angular_speed (as2::sensors::Sensor
+  // auto-prefixes "sensor_measurements/" the same way imu_sensor_ptr_/
+  // battery_sensor_ptr_ do).
+  std::unique_ptr<as2::sensors::Sensor<sensor_msgs::msg::JointState>> motor_sensor_ptr_;
   std::unique_ptr<as2::sensors::Sensor<nav_msgs::msg::Odometry>> odometry_raw_estimation_ptr_;
   std::unique_ptr<as2::sensors::GPS> gps_sensor_ptr_;
 
@@ -278,12 +282,10 @@ private:
   // Debug rc publisher
   rclcpp::Publisher<as2_msgs::msg::UInt16MultiArrayStamped>::SharedPtr debug_rc_command_pub_;
   rclcpp::Publisher<as2_msgs::msg::UInt16MultiArrayStamped>::SharedPtr debug_rc_read_pub_;
-  rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_high_rate_pub_;
-  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr motor_speed_high_rate_pub_;
-  // Single publisher: imu_high_rate and motor_speed_high_rate now always
-  // share the exact same time_us (one EKF_INPUTS bundle feeds both), so a
-  // separate time-reference topic per output topic would just be duplicates.
-  rclcpp::Publisher<sensor_msgs::msg::TimeReference>::SharedPtr pi_protocol_time_ref_pub_;
+  // Raw FC time_us behind the imu_sensor_ptr_/motor_sensor_ptr_ publications
+  // above - both share the exact same time_us (one EKF_INPUTS bundle feeds
+  // both), so a single publisher here covers both.
+  rclcpp::Publisher<sensor_msgs::msg::TimeReference>::SharedPtr og_timestamp_pub_;
   rclcpp::Publisher<geometry_msgs::msg::QuaternionStamped>::SharedPtr attitude_pub_;
   rclcpp::Publisher<as2_msgs::msg::UInt16MultiArrayStamped>::SharedPtr debug_motors_pub_;
   // [armed, pi_override_active, rx_link_valid] as 0/1, decoded from PI_STATUS.flags.

@@ -43,10 +43,10 @@ background thread. The wire format is a single synchronized bundle per sample �
 (accel + gyro rates + all 4 motor speeds, one snapshot, one `time_us`, fixed-point encoded for
 bandwidth) — republished here as two separate ROS topics once parsed, since the synchronization
 only needs to happen on the wire, not in how it's exposed to consumers:
-- `sensor_msgs/msg/Imu` on `imu_high_rate`, and also fed into AS2's standard
-  `sensor_measurements/imu` topic (via the `imu` sensor wrapper) for the state estimator.
-- `sensor_msgs/msg/JointState` on `motor_speed_high_rate` — measured motor angular speeds
-  (rad/s, `velocity` field). Indexed in **Betaflight's own mixer output order**
+- `sensor_msgs/msg/Imu` on `sensor_measurements/imu` (via the `imu` sensor wrapper) — also the
+  topic AS2's state estimator consumes.
+- `sensor_msgs/msg/JointState` on `sensor_measurements/motor_angular_speed` — measured motor
+  angular speeds (rad/s, `velocity` field). Indexed in **Betaflight's own mixer output order**
   (`[RR, FR, RL, FL]`) — this is *not* the `indi_controller`/simulator convention used elsewhere
   in the wider workspace (`[FR, RR, RL, FL]`); permute if you need to match that.
 
@@ -62,9 +62,9 @@ time-stamped inputs from different instants.
 clock) is converted to a host-clock timestamp via a continuously-adapting offset tracker
 (`PiProtocolClockSync`, sliding-window minimum-offset / "clock filter" method), self-correcting
 for clock drift over long runs. The raw `time_us` is preserved too, published alongside as
-`sensor_msgs/msg/TimeReference` on `pi_protocol/time_reference` (`time_ref` = raw FC time,
-`source` = `"indiflight_fc_micros"`) — one shared topic, since both `imu_high_rate` and
-`motor_speed_high_rate` now always come from the same synchronized sample.
+`sensor_msgs/msg/TimeReference` on `debug/platform/og_timestamp` (`time_ref` = raw FC time,
+`source` = `"indiflight_fc_micros"`) — one shared topic, since both `sensor_measurements/imu` and
+`sensor_measurements/motor_angular_speed` now always come from the same synchronized sample.
 
 **Wiring**: on the FC, `FUNCTION_TELEMETRY_PI` must be assigned to a UART that is physically
 wired to a serial port on the host, at 921600 baud — e.g. via the CLI:

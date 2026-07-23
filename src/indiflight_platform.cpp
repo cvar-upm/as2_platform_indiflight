@@ -187,12 +187,8 @@ IndiflightPlatform::IndiflightPlatform(const rclcpp::NodeOptions & options)
   // publisher construction and causes a null-dereference crash.
   debug_rc_command_pub_ = this->create_publisher<as2_msgs::msg::UInt16MultiArrayStamped>(
     "debug/rc/command", 1);
-  imu_high_rate_pub_ = this->create_publisher<sensor_msgs::msg::Imu>(
-    "imu_high_rate", rclcpp::SensorDataQoS());
-  motor_speed_high_rate_pub_ = this->create_publisher<sensor_msgs::msg::JointState>(
-    "motor_speed_high_rate", rclcpp::SensorDataQoS());
-  pi_protocol_time_ref_pub_ = this->create_publisher<sensor_msgs::msg::TimeReference>(
-    "pi_protocol/time_reference", rclcpp::SensorDataQoS());
+  og_timestamp_pub_ = this->create_publisher<sensor_msgs::msg::TimeReference>(
+    "debug/platform/og_timestamp", rclcpp::SensorDataQoS());
   attitude_pub_ = this->create_publisher<geometry_msgs::msg::QuaternionStamped>("attitude", 1);
   debug_motors_pub_ = this->create_publisher<as2_msgs::msg::UInt16MultiArrayStamped>(
     "debug/motors", 1);
@@ -245,6 +241,8 @@ void IndiflightPlatform::configureSensors()
 {
   imu_sensor_ptr_ = std::make_unique<as2::sensors::Imu>("imu", this);
   battery_sensor_ptr_ = std::make_unique<as2::sensors::Battery>("battery", this);
+  motor_sensor_ptr_ =
+    std::make_unique<as2::sensors::Sensor<sensor_msgs::msg::JointState>>("motor_angular_speed", this);
   // gps_sensor_ptr_ = std::make_unique<as2::sensors::GPS>("gps", this);
 
   // odometry_raw_estimation_ptr_ =
@@ -395,9 +393,8 @@ void IndiflightPlatform::onPiProtocolEkfInputs(const pi_EKF_INPUTS_t & msg)
   imu_msg.linear_acceleration_covariance[8] = imu_accel_covariance_;
   // Orientation not provided on this channel.
   imu_msg.orientation_covariance[0] = -1.0;
-  imu_high_rate_pub_->publish(imu_msg);
-  // Also feeds AS2's standard sensor_measurements/imu topic (used by AS2's
-  // state estimator) - this used to come from the now-removed MSP onImu().
+  // sensor_measurements/imu (as2::sensors::Imu) - used by AS2's state
+  // estimator; this used to come from the now-removed MSP onImu().
   imu_sensor_ptr_->updateAndPublish(imu_msg);
 
   sensor_msgs::msg::JointState motor_msg;
@@ -411,7 +408,8 @@ void IndiflightPlatform::onPiProtocolEkfInputs(const pi_EKF_INPUTS_t & msg)
   motor_msg.velocity = {
     static_cast<double>(msg.omega1), static_cast<double>(msg.omega2),
     static_cast<double>(msg.omega3), static_cast<double>(msg.omega4)};
-  motor_speed_high_rate_pub_->publish(motor_msg);
+  // sensor_measurements/motor_angular_speed (as2::sensors::Sensor)
+  motor_sensor_ptr_->updateData(motor_msg);
 
   // Raw FC time_us preserved alongside the corrected stamp, shared by both
   // topics above since they now always come from the same synchronized
@@ -422,7 +420,7 @@ void IndiflightPlatform::onPiProtocolEkfInputs(const pi_EKF_INPUTS_t & msg)
   time_ref_msg.header.frame_id = base_link_frame_id_;
   time_ref_msg.time_ref = rclcpp::Time(static_cast<int64_t>(msg.time_us) * 1000);
   time_ref_msg.source = "indiflight_fc_micros";
-  pi_protocol_time_ref_pub_->publish(time_ref_msg);
+  og_timestamp_pub_->publish(time_ref_msg);
 }
 
 void IndiflightPlatform::onAltitude(const msp::msg::Altitude & altitude)
