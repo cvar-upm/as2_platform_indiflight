@@ -199,6 +199,14 @@ private:
     yaw_slope_ = (max_yaw_rate_ - min_yaw_rate_) / static_cast<double>(PULSE_RANGE);
   }
 
+  /**
+   * @brief Rotates IMU gyro/accel samples from indiflight's FRD firmware frame
+   * into the user-configured body frame (desired_frame_T.r/p/y), in place.
+   * Default desired_frame_T.r = pi implements FRD -> FLU (keep X, negate Y and Z).
+   */
+  void rotateImuToDesiredFrame(
+    Eigen::Vector3d & angular_velocity, Eigen::Vector3d & linear_acceleration) const;
+
 private:
   bool manual_from_operator_ = false;
   bool set_arm_ = false;
@@ -226,6 +234,13 @@ private:
   double imu_gyro_covariance_ = 0.0;
   double imu_accel_covariance_ = 0.0;
   double imu_orientation_covariance_ = 0.0;
+
+  // Rotation from indiflight's FRD firmware frame to the platform's configured
+  // body frame, computed once in readParameters() from desired_frame_T.r/p/y.
+  double desired_frame_roll_ = 0.0;
+  double desired_frame_pitch_ = 0.0;
+  double desired_frame_yaw_ = 0.0;
+  Eigen::Matrix3d desired_frame_rotation_ = Eigen::Matrix3d::Identity();
 
   double battery_hz_ = 0.0;
   double altitude_hz_ = 0.0;
@@ -261,6 +276,9 @@ private:
 
   bool simulation_mode_ = false;
   bool external_odom_ = true;
+  // See readParameters()'s declare_parameter<bool>("use_fcu_stamps", ...)
+  // comment for the full tradeoff. Consumed in onPiProtocolEkfInputs().
+  bool use_fcu_stamps_ = true;
   std::string base_link_frame_id_;
   std::string odom_frame_id_;
 

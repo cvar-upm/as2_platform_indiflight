@@ -72,7 +72,14 @@ public:
 
 private:
   static constexpr int kNumBuckets = 8;
-  static constexpr int64_t kBucketDurationNs = 2'000'000'000;  // 2s -> 16s total window
+  // 250ms -> 2s total window. Was 2s/16s: with pi-protocol running EKF_INPUTS
+  // at ~2000Hz over a dedicated 921600-baud link, even 250ms buckets still
+  // hold ~500 candidate samples - plenty to keep rejecting genuine latency
+  // spikes - while capping the staleness-driven reconstruction error
+  // (~skew * staleness, see indi_experiment clock-offset investigation) at
+  // ~6ms instead of ~48ms for the ~3700ppm FC clock rate error measured
+  // there, pending a real fix on the FC side.
+  static constexpr int64_t kBucketDurationNs = 250'000'000;
   static constexpr int64_t kWrapPeriodUs = int64_t{1} << 32;   // ~71.6 minutes
 
   std::array<int64_t, kNumBuckets> bucket_min_offset_ns_{};

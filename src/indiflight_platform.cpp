@@ -74,6 +74,25 @@ void IndiflightPlatform::readParameters()
   this->declare_parameter<float>("imu.covariance.accel");
   this->declare_parameter<float>("imu.covariance.orientation");
 
+  // Rotation (rad) from indiflight's FRD firmware frame to the user's
+  // preferred body frame, applied to IMU samples by rotateImuToDesiredFrame().
+  // Default desired_frame_T.r = pi implements FRD -> FLU (keep X, negate Y and Z).
+  // Warn (rather than require, like the parameters above) since this default
+  // is a sensible fallback and silently flying with a wrong frame convention
+  // is the kind of bug that's easy to miss until it's in the air.
+  const auto & param_overrides = this->get_node_parameters_interface()->get_parameter_overrides();
+  if (!param_overrides.count("desired_frame_T.r") || !param_overrides.count("desired_frame_T.p") ||
+    !param_overrides.count("desired_frame_T.y"))
+  {
+    RCLCPP_WARN(
+      this->get_logger(),
+      "desired_frame_T.r/p/y not fully specified - missing value(s) will use the default "
+      "FRD -> FLU rotation (r=%.5f, p=%.5f, y=%.5f)", M_PI, 0.0, 0.0);
+  }
+  this->declare_parameter<float>("desired_frame_T.r", static_cast<float>(M_PI));
+  this->declare_parameter<float>("desired_frame_T.p", 0.0f);
+  this->declare_parameter<float>("desired_frame_T.y", 0.0f);
+
   // Set publishers frequency. Set frequency to 0 to disable publication
   this->declare_parameter<float>("battery_hz");
   this->declare_parameter<float>("altitude_hz");
@@ -96,6 +115,20 @@ void IndiflightPlatform::readParameters()
 
   this->declare_parameter<bool>("use_thrust_map");
 
+  // true (default): header.stamp on IMU/motor messages is reconstructed
+  // host time for the instant the FC actually sampled the measurement
+  // (via pi_protocol_clock_sync_, latency-jitter-rejected but subject to
+  // whatever FC clock rate error exists - see indi_experiment clock-offset
+  // investigation notes). false: header.stamp is simply this node's
+  // get_clock()->now() at message-arrival time, matching the convention
+  // used elsewhere in AS2 - trades away latency-jitter rejection and the
+  // (usually small) FC-instant accuracy for guaranteed consistency with
+  // other now()-stamped topics. debug/platform/og_timestamp keeps
+  // publishing both the stamp actually used AND the raw FC time_ref
+  // regardless of this setting, so the true offset can still be recovered
+  // post-hoc either way.
+  this->declare_parameter<bool>("use_fcu_stamps", use_fcu_stamps_);
+
   this->declare_parameter<bool>("limit_output");
   this->declare_parameter<float>("limit_roll_percent");
   this->declare_parameter<float>("limit_pitch_percent");
@@ -107,6 +140,7 @@ void IndiflightPlatform::readParameters()
   odom_frame_id_ = as2::tf::generateTfName(this, "odom");
 
   external_odom_ = this->get_parameter("external_odom").as_bool();
+  use_fcu_stamps_ = this->get_parameter("use_fcu_stamps").as_bool();
 
   pi_protocol_enable_ = this->get_parameter("pi_protocol.enable").as_bool();
   pi_protocol_device_ = this->get_parameter("pi_protocol.device").as_string();
@@ -115,6 +149,14 @@ void IndiflightPlatform::readParameters()
   imu_gyro_covariance_ = this->get_parameter("imu.covariance.gyro").as_double();
   imu_accel_covariance_ = this->get_parameter("imu.covariance.accel").as_double();
   imu_orientation_covariance_ = this->get_parameter("imu.covariance.orientation").as_double();
+
+  desired_frame_roll_ = this->get_parameter("desired_frame_T.r").as_double();
+  desired_frame_pitch_ = this->get_parameter("desired_frame_T.p").as_double();
+  desired_frame_yaw_ = this->get_parameter("desired_frame_T.y").as_double();
+  desired_frame_rotation_ =
+    (Eigen::AngleAxisd(desired_frame_yaw_, Eigen::Vector3d::UnitZ()) *
+    Eigen::AngleAxisd(desired_frame_pitch_, Eigen::Vector3d::UnitY()) *
+    Eigen::AngleAxisd(desired_frame_roll_, Eigen::Vector3d::UnitX())).toRotationMatrix();
 
   battery_hz_ = this->get_parameter("battery_hz").as_double();
   altitude_hz_ = this->get_parameter("altitude_hz").as_double();
@@ -148,12 +190,18 @@ void IndiflightPlatform::readParameters()
     pi_protocol_device_.c_str(), pi_protocol_baudrate_);
   RCLCPP_INFO(this->get_logger(), "External odometry mode: %s", external_odom_ ? "true" : "false");
   RCLCPP_INFO(
+    this->get_logger(), "IMU/motor header.stamp source: %s",
+    use_fcu_stamps_ ? "FC-instant (pi_protocol_clock_sync_)" : "arrival time (now())");
+  RCLCPP_INFO(
     this->get_logger(), "Simulation mode: %s",
     this->get_parameter("use_sim_time").as_bool() ? "true" : "false");
   RCLCPP_INFO(this->get_logger(), "Thrust bounds: [%f, %f]", min_thrust_, max_thrust_);
   RCLCPP_INFO(this->get_logger(), "Pitch rate bounds: [%f, %f]", min_pitch_rate_, max_pitch_rate_);
   RCLCPP_INFO(this->get_logger(), "Roll rate bounds: [%f, %f]", min_roll_rate_, max_roll_rate_);
   RCLCPP_INFO(this->get_logger(), "Yaw rate bounds: [%f, %f]", min_yaw_rate_, max_yaw_rate_);
+  RCLCPP_INFO(
+    this->get_logger(), "desired_frame_T rotation (r,p,y): [%f, %f, %f]",
+    desired_frame_roll_, desired_frame_pitch_, desired_frame_yaw_);
   computeControlSlopes();
 
   RCLCPP_INFO(this->get_logger(), "Limiting output: %s", limit_output_ ? "true" : "false");
@@ -362,6 +410,13 @@ void IndiflightPlatform::ownKillSwitch()
 
 void IndiflightPlatform::ownStopPlatform() {RCLCPP_WARN(this->get_logger(), "NOT IMPLEMENTED");}
 
+void IndiflightPlatform::rotateImuToDesiredFrame(
+  Eigen::Vector3d & angular_velocity, Eigen::Vector3d & linear_acceleration) const
+{
+  angular_velocity = desired_frame_rotation_ * angular_velocity;
+  linear_acceleration = desired_frame_rotation_ * linear_acceleration;
+}
+
 void IndiflightPlatform::onPiProtocolEkfInputs(const pi_EKF_INPUTS_t & msg)
 {
   // Fixed-point decode, exact inverse of telemetry/pi.c's piSendEkfInputs()
@@ -372,18 +427,30 @@ void IndiflightPlatform::onPiProtocolEkfInputs(const pi_EKF_INPUTS_t & msg)
   // Captured first, right after piParse() hands off the struct, to keep the
   // clock-sync offset sample as tight as possible.
   const int64_t host_now_ns = this->get_clock()->now().nanoseconds();
+  // Always feed the filter, even when use_fcu_stamps_ is false, so it stays
+  // warmed up (and so og_timestamp's header.stamp - see below - reflects
+  // whichever mode is actually selected without a cold-start gap if the
+  // param is flipped later).
   const int64_t synced_ns = pi_protocol_clock_sync_.sync(msg.time_us, host_now_ns);
-  const rclcpp::Time stamp(synced_ns);
+  const rclcpp::Time stamp(use_fcu_stamps_ ? synced_ns : host_now_ns);
+
+  Eigen::Vector3d angular_velocity(
+    msg.p * kGyroLsbToRadps, msg.q * kGyroLsbToRadps, msg.r * kGyroLsbToRadps);
+  Eigen::Vector3d linear_acceleration(
+    msg.x * kAccelLsbToMps2, msg.y * kAccelLsbToMps2, msg.z * kAccelLsbToMps2);
+  // Rotate out of indiflight's FRD firmware frame into desired_frame_T (default
+  // FLU) before publishing, so base_link_frame_id_ actually matches its contents.
+  rotateImuToDesiredFrame(angular_velocity, linear_acceleration);
 
   sensor_msgs::msg::Imu imu_msg;
   imu_msg.header.stamp = stamp;
   imu_msg.header.frame_id = base_link_frame_id_;
-  imu_msg.angular_velocity.x = msg.p * kGyroLsbToRadps;
-  imu_msg.angular_velocity.y = msg.q * kGyroLsbToRadps;
-  imu_msg.angular_velocity.z = msg.r * kGyroLsbToRadps;
-  imu_msg.linear_acceleration.x = msg.x * kAccelLsbToMps2;
-  imu_msg.linear_acceleration.y = msg.y * kAccelLsbToMps2;
-  imu_msg.linear_acceleration.z = msg.z * kAccelLsbToMps2;
+  imu_msg.angular_velocity.x = angular_velocity.x();
+  imu_msg.angular_velocity.y = angular_velocity.y();
+  imu_msg.angular_velocity.z = angular_velocity.z();
+  imu_msg.linear_acceleration.x = linear_acceleration.x();
+  imu_msg.linear_acceleration.y = linear_acceleration.y();
+  imu_msg.linear_acceleration.z = linear_acceleration.z();
   // no deg->rad conversion needed here, pi-protocol's gyro is already rad/s.
   imu_msg.angular_velocity_covariance[0] = imu_gyro_covariance_;
   imu_msg.angular_velocity_covariance[4] = imu_gyro_covariance_;
