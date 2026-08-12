@@ -3,31 +3,26 @@
     cmd_freq: 100.0  # Hz of platform commands send
     info_freq: 10.0  # Hz of platform info publish
     external_odom: false  # Flag to use external odometry source
-    use_fcu_stamps: true  # IMU/motor header.stamp: true = reconstructed FC sample-instant
-      # (latency-jitter-rejected, subject to FC clock rate error); false = this node's
-      # arrival-time now(), matching the now()-stamped convention used elsewhere in AS2.
-      # debug/platform/og_timestamp always publishes the raw FC time_ref regardless, so
-      # the offset can still be recovered post-hoc either way.
+    global_ref_frame: "earth"  # ENU frame poses are expressed in before ENU->NED (default: earth)
+    num_rotors: 4  # Rotor speeds published, of the 6 EKF_INPUTS carries (default: 4)
+    use_fcu_stamps: true  # Stamp IMU with the FC sample instant instead of arrival time
     pi_protocol:
-      enable: true  # This node's only link to the FC - a failed connection is fatal
-      device: "/dev/ttyTHS1"  # UART for indiflight's pi-protocol (RC_OVERRIDE/PI_STATUS/BATTERY/telemetry)
-      baudrate: 921600  # Matches indiflight's BAUD_AUTO default for FUNCTION_TELEMETRY_PI
+      device: "/dev/ttyTHS1"  # UART wired to the FC's FUNCTION_TELEMETRY_PI port
+      baudrate: 921600  # indiflight's BAUD_AUTO default
+    external_pose:  # Pose forwarded to the FC's onboard EKF as EXTERNAL_POSE
+      enable: false  # (default: false)
+      pose_topic: ""  # geometry_msgs/msg/PoseStamped source
+      mocap_topic: ""  # mocap4r2_msgs/msg/RigidBodies source, excludes pose_topic
+      rigid_body_name: ""  # Body to forward. Required with mocap_topic
+      rate: 100.0  # Hz of the earth->base_link TF poll, used when no topic is set
     imu:
       covariance:
         gyro: 0.0  # IMU gyroscope mean noise (set to 0 for not calibrated)
         accel: 0.0  # IMU accelerometer mean noise (set to 0 for not calibrated)
-        orientation: 0.0 # IMU orientation mean noise (set to 0 for not calibrated)
-    desired_frame_T:  # Rotation (rad) from indiflight's FRD firmware frame to this platform's body frame
-      r: 3.14159  # Roll: default 180 deg about X implements FRD -> FLU (keep X, negate Y and Z)
+    desired_frame_T:  # Rotation from the FC's FRD frame to the body frame. Radians
+      r: 3.14159  # Roll. Default is FRD -> FLU
       p: 0.0
       y: 0.0
-    # battery_hz/altitude_hz/attitude_hz/rc_hz/motor_hz: reserved for future pi-protocol
-    # telemetry equivalents. MSP is not used by this node, so these currently do nothing.
-    battery_hz: 0.0
-    altitude_hz: 0.0
-    attitude_hz: 0.0
-    rc_hz: 0.0
-    motor_hz: 0.0
     alpha_voltage: 0.0  # Filter for battery voltage measurements
     min_cell_voltage: 3.7  # Security voltage level for LiPO cells (V)
     max_cell_voltage: 4.2  # Maximum cell charge (V)
@@ -43,7 +38,7 @@
     yaw_rate:
       max : 360.0  # Max yaw rate to send to platform (deg/s) # ATTENTION: this is in deg/s
       min : -360.0  # Min yaw rate to send to platform (deg/s) # ATTENTION: this is in deg/s
-    use_thrust_map: false # Flag to use lineal approximation (default) or polynomial thrust map 
+    use_thrust_map: false # Flag to use lineal approximation (default) or polynomial thrust map
     polynomial_thrust_map:  # thrust map poly coefficients from fitted surface to benchmark data
       max_throttle: 2000.0
       min_throttle: 1000.0
@@ -65,5 +60,3 @@
     limit_pitch_percent: 1.0  # Limit of pitch command in percent (between 0 and 1)
     limit_yaw_percent: 1.0  # Limit of yaw command in percent (between 0 and 1)
     limit_thrust_percent: 0.6  # Limit of thrust command in percent (between 0 and 1)
-
-

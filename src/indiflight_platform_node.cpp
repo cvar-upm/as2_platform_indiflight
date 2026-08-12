@@ -27,15 +27,13 @@
 // POSSIBILITY OF SUCH DAMAGE.
 
 /**
- * @file indiflight_platform_node.cpp
- *
- * MavlinkPlatform node
- *
- * @author Miguel Fernández Cortizas
- *         Rafael Pérez Seguí
- *         Pedro Arias Pérez
- *         Javier Melero Deza
- */
+* @file indiflight_platform_node.cpp
+*
+* IndiflightPlatform node
+*
+* @authors Rafael Perez-Segui
+*          Francisco José Anguita Chamorro
+*/
 
 #include "as2_core/core_functions.hpp"
 #include "as2_platform_indiflight/indiflight_platform.hpp"
