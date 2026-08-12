@@ -18,7 +18,7 @@ if(NOT EXISTS ${PI_PROTOCOL_DIR}/config.yaml)
   include(FetchContent)
   fetchcontent_declare(
     pi_protocol_upstream
-    GIT_REPOSITORY https://github.com/cvar-upm/pi-protocol.git
+    GIT_REPOSITORY https://github.com/IMAV2026-MAVLab/pi-protocol.git
     GIT_TAG hexa_as2
     SOURCE_DIR ${PI_PROTOCOL_DIR}
   )
