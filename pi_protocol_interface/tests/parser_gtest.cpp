@@ -27,19 +27,38 @@
 // POSSIBILITY OF SUCH DAMAGE.
 
 /**
- * @file pi_protocol_parser_gtest.cpp
- *
- * Exercises pi-protocol's checksum/escape-byte framing without any hardware,
- * using the generated encoder (piAccumulateMsg) to round-trip through the
- * generated/hand-written parser (piParse).
- */
+* @file parser_gtest.cpp
+*
+* pi-protocol framing and stamp gate tests
+*
+* @authors Rafael Perez-Segui
+*          Francisco José Anguita Chamorro
+*/
 
 #include <gtest/gtest.h>
 
 extern "C" {
-#include "pi-messages.h"
-#include "pi-protocol.h"
+#include "pi-messages.h"  // NOLINT(build/include_subdir) - generated, flat include dir
+#include "pi-protocol.h"  // NOLINT(build/include_subdir) - generated, flat include dir
 }
+
+#include "pi_protocol/client.hpp"
+
+// The wire has no length byte and no version handshake: the compiled table IS
+// the protocol (see the pinned checkout's config.yaml). A change here means an FC built
+// against the previous table stops parsing, silently.
+static_assert(PI_MSG_IMU_ID == 1, "IMU id drifted");
+static_assert(PI_MSG_EXTERNAL_POSE_ID == 3, "EXTERNAL_POSE id drifted");
+static_assert(PI_MSG_EXTERNAL_POSE_PAYLOAD_LEN == 44, "EXTERNAL_POSE layout drifted");
+static_assert(PI_MSG_POS_SETPOINT_ID == 4, "POS_SETPOINT id drifted");
+static_assert(PI_MSG_POS_SETPOINT_PAYLOAD_LEN == 32, "POS_SETPOINT layout drifted");
+static_assert(PI_MSG_EKF_INPUTS_ID == 9, "EKF_INPUTS id drifted");
+static_assert(PI_MSG_EKF_INPUTS_PAYLOAD_LEN == 28, "EKF_INPUTS layout drifted (6 rotors)");
+static_assert(PI_MSG_AUX_ID == 12, "AUX id drifted");
+static_assert(PI_MSG_AUX_PAYLOAD_LEN == 32, "AUX layout drifted");
+static_assert(PI_MSG_RC_OVERRIDE_ID == 13, "RC_OVERRIDE id drifted");
+static_assert(PI_MSG_PI_STATUS_ID == 14, "PI_STATUS id drifted");
+static_assert(PI_MSG_BATTERY_ID == 15, "BATTERY id drifted");
 
 TEST(PiProtocolParser, RoundTripImuMessage)
 {
@@ -75,16 +94,26 @@ TEST(PiProtocolParser, RoundTripImuMessage)
   EXPECT_FLOAT_EQ(piMsgImuRx->z, 0.2f);
 }
 
-TEST(PiProtocolParser, RoundTripMotorMessage)
+TEST(PiProtocolParser, RoundTripAuxMessage)
 {
-  piMsgMotorTx.time_us = 654321;
-  piMsgMotorTx.omega0 = 1133.0f;
-  piMsgMotorTx.omega1 = 1140.5f;
-  piMsgMotorTx.omega2 = -1125.25f;
-  piMsgMotorTx.omega3 = 1150.75f;
+  piMsgAuxTx.time_us = 654321;
+  piMsgAuxTx.aux_1 = 1000;
+  piMsgAuxTx.aux_2 = 1500;
+  piMsgAuxTx.aux_3 = 2000;
+  piMsgAuxTx.aux_4 = 1100;
+  piMsgAuxTx.aux_5 = 900;
+  piMsgAuxTx.aux_6 = 1800;
+  piMsgAuxTx.aux_7 = 1000;
+  piMsgAuxTx.aux_8 = 1000;
+  piMsgAuxTx.aux_9 = 1000;
+  piMsgAuxTx.aux_10 = 1000;
+  piMsgAuxTx.aux_11 = 1000;
+  piMsgAuxTx.aux_12 = 1000;
+  piMsgAuxTx.aux_13 = 1000;
+  piMsgAuxTx.aux_14 = 1000;
 
   uint8_t buf[2 * PI_MAX_PACKET_LEN];
-  const unsigned int n = piAccumulateMsg(&piMsgMotorTx, buf);
+  const unsigned int n = piAccumulateMsg(&piMsgAuxTx, buf);
   ASSERT_GT(n, 0u);
 
   pi_parse_states_t state{};
@@ -96,13 +125,67 @@ TEST(PiProtocolParser, RoundTripMotorMessage)
     }
   }
 
-  ASSERT_EQ(last_id, PI_MSG_MOTOR_ID);
-  ASSERT_NE(piMsgMotorRx, nullptr);
-  EXPECT_EQ(piMsgMotorRx->time_us, 654321u);
-  EXPECT_FLOAT_EQ(piMsgMotorRx->omega0, 1133.0f);
-  EXPECT_FLOAT_EQ(piMsgMotorRx->omega1, 1140.5f);
-  EXPECT_FLOAT_EQ(piMsgMotorRx->omega2, -1125.25f);
-  EXPECT_FLOAT_EQ(piMsgMotorRx->omega3, 1150.75f);
+  ASSERT_EQ(last_id, PI_MSG_AUX_ID);
+  ASSERT_NE(piMsgAuxRx, nullptr);
+  EXPECT_EQ(piMsgAuxRx->time_us, 654321u);
+  EXPECT_EQ(piMsgAuxRx->aux_1, 1000);
+  EXPECT_EQ(piMsgAuxRx->aux_2, 1500);
+  EXPECT_EQ(piMsgAuxRx->aux_3, 2000);
+  EXPECT_EQ(piMsgAuxRx->aux_4, 1100);
+  EXPECT_EQ(piMsgAuxRx->aux_5, 900);
+  EXPECT_EQ(piMsgAuxRx->aux_6, 1800);
+  EXPECT_EQ(piMsgAuxRx->aux_14, 1000);
+}
+
+TEST(FcStampGate, AcceptsMonotonicStream)
+{
+  pi_protocol::FcStampGate gate;
+  EXPECT_TRUE(gate.accept(1000000));
+  EXPECT_TRUE(gate.accept(1002000));
+  EXPECT_TRUE(gate.accept(1004000));
+  EXPECT_EQ(gate.last(), 1004000u);
+}
+
+TEST(FcStampGate, AcceptsSmallBackwardsJitter)
+{
+  // e.g. hex IMU stamped at the gyro EXTI instant, slightly before the AUX
+  // sent in the same telemetry tick.
+  pi_protocol::FcStampGate gate;
+  EXPECT_TRUE(gate.accept(1000000));
+  EXPECT_TRUE(gate.accept(999000));
+  // The cached tick never regresses (TX stamping wants the newest).
+  EXPECT_EQ(gate.last(), 1000000u);
+}
+
+TEST(FcStampGate, RejectsGarbageStamp)
+{
+  pi_protocol::FcStampGate gate;
+  EXPECT_TRUE(gate.accept(1000000));
+  // A mis-framed packet that slipped the 8-bit CRC carries a random stamp.
+  EXPECT_FALSE(gate.accept(0xDEADBEEF));
+  // The stream continues unaffected.
+  EXPECT_TRUE(gate.accept(1002000));
+  EXPECT_EQ(gate.last(), 1002000u);
+}
+
+TEST(FcStampGate, ReseedsAfterFcReboot)
+{
+  pi_protocol::FcStampGate gate;
+  EXPECT_TRUE(gate.accept(3600000000u));  // 1h of FC uptime
+  // FC reboots: micros() restarts near zero. First message fails the window...
+  EXPECT_FALSE(gate.accept(50000));
+  // ...but a second consistent stamp re-seeds the clock.
+  EXPECT_TRUE(gate.accept(52000));
+  EXPECT_EQ(gate.last(), 52000u);
+}
+
+TEST(FcStampGate, MicrosWrapIsAccepted)
+{
+  // micros() wraps every ~71.6 min; the int32 delta comparison is wrap-safe.
+  pi_protocol::FcStampGate gate;
+  EXPECT_TRUE(gate.accept(0xFFFFFF00u));
+  EXPECT_TRUE(gate.accept(0x00000100u));  // 512 us later, across the wrap
+  EXPECT_EQ(gate.last(), 0x00000100u);
 }
 
 TEST(PiProtocolParser, RoundTripEkfInputsMessage)
@@ -118,6 +201,8 @@ TEST(PiProtocolParser, RoundTripEkfInputsMessage)
   piMsgEkfInputsTx.omega2 = 1140;
   piMsgEkfInputsTx.omega3 = 1125;
   piMsgEkfInputsTx.omega4 = 1150;
+  piMsgEkfInputsTx.omega5 = 1160;
+  piMsgEkfInputsTx.omega6 = 1170;
 
   uint8_t buf[2 * PI_MAX_PACKET_LEN];
   const unsigned int n = piAccumulateMsg(&piMsgEkfInputsTx, buf);
@@ -145,6 +230,8 @@ TEST(PiProtocolParser, RoundTripEkfInputsMessage)
   EXPECT_EQ(piMsgEkfInputsRx->omega2, 1140u);
   EXPECT_EQ(piMsgEkfInputsRx->omega3, 1125u);
   EXPECT_EQ(piMsgEkfInputsRx->omega4, 1150u);
+  EXPECT_EQ(piMsgEkfInputsRx->omega5, 1160u);
+  EXPECT_EQ(piMsgEkfInputsRx->omega6, 1170u);
 }
 
 TEST(PiProtocolParser, CorruptedChecksumIsRejected)

@@ -1,4 +1,4 @@
-thirdparty/
+pi_protocol_interface/pi-protocol_lib/pi-protocol/
 .vscode/
 build/
 install/

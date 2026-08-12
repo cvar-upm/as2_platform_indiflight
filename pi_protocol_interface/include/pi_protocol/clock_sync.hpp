@@ -27,18 +27,23 @@
 // POSSIBILITY OF SUCH DAMAGE.
 
 /**
- * @file pi_protocol_clock_sync.hpp
- *
- * PiProtocolClockSync class definition
- */
+* @file clock_sync.hpp
+*
+* pi-protocol ClockSync class definition
+*
+* @authors Rafael Perez-Segui
+*          Francisco José Anguita Chamorro
+*/
 
-#ifndef AS2_PLATFORM_INDIFLIGHT__PI_PROTOCOL_CLOCK_SYNC_HPP_
-#define AS2_PLATFORM_INDIFLIGHT__PI_PROTOCOL_CLOCK_SYNC_HPP_
+#ifndef PI_PROTOCOL__CLOCK_SYNC_HPP_
+#define PI_PROTOCOL__CLOCK_SYNC_HPP_
 
 #include <array>
+#include <atomic>
+#include <optional>
 #include <cstdint>
 
-namespace as2_platform_indiflight
+namespace pi_protocol
 {
 
 /**
@@ -57,18 +62,51 @@ namespace as2_platform_indiflight
  * ROS-agnostic (plain int64_t nanoseconds in/out) so it's usable from a
  * hardware-free unit test and doesn't tie transport/sync logic to rclcpp.
  *
- * Not thread-safe: intended to be driven from a single dedicated thread
- * (as PiProtocolClient's reader thread already is) - no internal locking.
+ * sync() and toHostTime() are not thread-safe and are intended to be driven
+ * from a single dedicated thread, as Client's reader thread already is.
+ * toFcTime() reads only the published offset and may be called from any
+ * thread, which the uplink needs: it runs on the executor.
  */
-class PiProtocolClockSync
+class ClockSync
 {
 public:
   /**
    * @brief Feed one (fc_time_us, host_now_ns) sample.
    * @return the current best-estimate host-clock nanosecond timestamp
    * corresponding to fc_time_us.
+   *
+   * @param fc_time_us Stamp of the message, in the FC micros() domain.
+   * @param host_now_ns Host clock reading when the message was received.
+   * @return The FC instant expressed in host clock nanoseconds.
    */
   int64_t sync(uint32_t fc_time_us, int64_t host_now_ns);
+
+  /**
+   * @brief Convert an FC stamp to host time with the offset estimated so far,
+   * without feeding the filter.
+   *
+   * For streams whose stamp is not a sampling instant: the firmware stamps
+   * those when it builds the message, so they sit later than a sample from the
+   * same tick and would bias the minimum-offset estimate.
+   *
+   * @param fc_time_us Stamp in the FC micros() domain.
+   * @return The instant in host clock nanoseconds, or nothing until sync() has
+   *         been called at least once.
+   */
+  std::optional<int64_t> toHostTime(uint32_t fc_time_us) const;
+
+  /**
+   * @brief Convert a host instant to the FC micros() domain, the inverse of
+   * toHostTime().
+   *
+   * For stamping an uplink measurement with the instant it was actually
+   * sampled, so the firmware sees its true age rather than a fresh one.
+   *
+   * @param host_ns Instant in host clock nanoseconds.
+   * @return The FC stamp, truncated to the uint32 the wire carries, or nothing
+   *         until sync() has been called at least once.
+   */
+  std::optional<uint32_t> toFcTime(int64_t host_ns) const;
 
 private:
   static constexpr int kNumBuckets = 8;
@@ -83,6 +121,10 @@ private:
   static constexpr int64_t kWrapPeriodUs = int64_t{1} << 32;   // ~71.6 minutes
 
   std::array<int64_t, kNumBuckets> bucket_min_offset_ns_{};
+  // Offset in use, republished by sync() so that toFcTime() can read it
+  // without touching the filter state the reader thread owns.
+  std::atomic<int64_t> published_offset_ns_{0};
+  std::atomic<bool> offset_valid_{false};
   int current_bucket_ = 0;
   int64_t current_bucket_start_ns_ = 0;
   bool initialized_ = false;
@@ -92,6 +134,6 @@ private:
   int64_t fc_time_epoch_us_ = 0;
 };
 
-}  // namespace as2_platform_indiflight
+}  // namespace pi_protocol
 
-#endif  // AS2_PLATFORM_INDIFLIGHT__PI_PROTOCOL_CLOCK_SYNC_HPP_
+#endif  // PI_PROTOCOL__CLOCK_SYNC_HPP_

@@ -27,24 +27,26 @@
 // POSSIBILITY OF SUCH DAMAGE.
 
 /**
- * @file pi_protocol_clock_sync_gtest.cpp
- *
- * Exercises PiProtocolClockSync's sliding-window minimum-offset tracking with
- * synthetic (fc_time_us, host_now_ns) sequences - no hardware needed.
- */
+* @file clock_sync_gtest.cpp
+*
+* pi-protocol ClockSync tests
+*
+* @authors Rafael Perez-Segui
+*          Francisco José Anguita Chamorro
+*/
 
 #include <gtest/gtest.h>
 
 #include <cstdint>
 #include <limits>
 
-#include "as2_platform_indiflight/pi_protocol_clock_sync.hpp"
+#include "pi_protocol/clock_sync.hpp"
 
-using as2_platform_indiflight::PiProtocolClockSync;
+using pi_protocol::ClockSync;
 
-TEST(PiProtocolClockSync, ConvergesToFixedOffset)
+TEST(ClockSync, ConvergesToFixedOffset)
 {
-  PiProtocolClockSync sync;
+  ClockSync sync;
   const int64_t true_offset_ns = 5'000'000;  // 5ms constant one-way latency
   const uint32_t step_us = 1000;             // 1kHz cadence
   uint32_t fc_time_us = 1000;
@@ -59,9 +61,9 @@ TEST(PiProtocolClockSync, ConvergesToFixedOffset)
   }
 }
 
-TEST(PiProtocolClockSync, RejectsLatencySpike)
+TEST(ClockSync, RejectsLatencySpike)
 {
-  PiProtocolClockSync sync;
+  ClockSync sync;
   const int64_t true_offset_ns = 5'000'000;
   const uint32_t step_us = 1000;
   uint32_t fc_time_us = 1000;
@@ -83,9 +85,9 @@ TEST(PiProtocolClockSync, RejectsLatencySpike)
   EXPECT_LT(spike_synced_ns, spike_host_now_ns - 40'000'000);
 }
 
-TEST(PiProtocolClockSync, HandlesTimeUsWraparound)
+TEST(ClockSync, HandlesTimeUsWraparound)
 {
-  PiProtocolClockSync sync;
+  ClockSync sync;
   const int64_t true_offset_ns = 5'000'000;
   const uint32_t step_us = 1000;
 
