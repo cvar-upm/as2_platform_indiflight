@@ -441,6 +441,10 @@ private:
   std::unique_ptr<as2::sensors::Sensor<sensor_msgs::msg::JointState>> motor_sensor_ptr_;
 
   // Debug publishers
+  std::string debug_rc_command_topic_;
+  std::string debug_og_timestamp_topic_;
+  std::string debug_pi_status_topic_;
+  std::string debug_aux_topic_;
   rclcpp::Publisher<as2_msgs::msg::UInt16MultiArrayStamped>::SharedPtr debug_rc_command_pub_;
   as2_msgs::msg::UInt16MultiArrayStamped debug_rc_command_;
   // Raw FC time_us behind the imu_sensor_ptr_/motor_sensor_ptr_ publications:

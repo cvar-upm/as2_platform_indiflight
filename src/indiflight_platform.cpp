@@ -81,16 +81,23 @@ IndiflightPlatform::IndiflightPlatform(const rclcpp::NodeOptions & options)
       "Thrust map disabled. Thrust will be mapped directly to throttle.");
   }
 
-  // Publishers before connect(): it starts a reader thread that can invoke a
-  // callback immediately, and a publisher built afterwards would be raced.
-  debug_rc_command_pub_ = this->create_publisher<as2_msgs::msg::UInt16MultiArrayStamped>(
-    "debug/rc/command", 1);
-  og_timestamp_pub_ = this->create_publisher<sensor_msgs::msg::TimeReference>(
-    "debug/platform/og_timestamp", rclcpp::SensorDataQoS());
-  debug_pi_status_pub_ = this->create_publisher<as2_msgs::msg::UInt16MultiArrayStamped>(
-    "debug/pi_status", 1);
-  debug_aux_pub_ = this->create_publisher<as2_msgs::msg::UInt16MultiArrayStamped>(
-    "debug/aux", 1);
+  // Debug topics
+  if (!debug_rc_command_topic_.empty()) {
+    debug_rc_command_pub_ = this->create_publisher<as2_msgs::msg::UInt16MultiArrayStamped>(
+      debug_rc_command_topic_, 1);
+  }
+  if (!debug_og_timestamp_topic_.empty()) {
+    og_timestamp_pub_ = this->create_publisher<sensor_msgs::msg::TimeReference>(
+      debug_og_timestamp_topic_, rclcpp::SensorDataQoS());
+  }
+  if (!debug_pi_status_topic_.empty()) {
+    debug_pi_status_pub_ = this->create_publisher<as2_msgs::msg::UInt16MultiArrayStamped>(
+      debug_pi_status_topic_, 1);
+  }
+  if (!debug_aux_topic_.empty()) {
+    debug_aux_pub_ = this->create_publisher<as2_msgs::msg::UInt16MultiArrayStamped>(
+      debug_aux_topic_, 1);
+  }
 
   // Callbacks are registered unconditionally: a firmware build that does not
   // emit one of these messages never triggers its callback.
@@ -178,6 +185,11 @@ void IndiflightPlatform::readParameters()
   if (num_rotors_ < 1 || num_rotors_ > 6) {
     throw std::runtime_error("num_rotors must be in [1, 6]");
   }
+  getParam("debug_topics.rc_command", debug_rc_command_topic_, true);
+  getParam("debug_topics.og_timestamp", debug_og_timestamp_topic_, true);
+  getParam("debug_topics.pi_status", debug_pi_status_topic_, true);
+  getParam("debug_topics.aux", debug_aux_topic_, true);
+
   getParam("imu.covariance.gyro", imu_gyro_covariance_, true);
   getParam("imu.covariance.accel", imu_accel_covariance_, true);
 
@@ -656,6 +668,9 @@ void IndiflightPlatform::publishImuSample(
 
   // Raw FC time_us preserved alongside the corrected stamp - see
   // pi_protocol::ClockSync for why time_us can't be used as header.stamp directly.
+  if (!og_timestamp_pub_) {
+    return;
+  }
   sensor_msgs::msg::TimeReference time_ref_msg;
   time_ref_msg.header.stamp = stamp;
   time_ref_msg.header.frame_id = base_link_frame_id_;
@@ -685,6 +700,9 @@ void IndiflightPlatform::updatePlatformState(bool armed, bool offboard)
 
 void IndiflightPlatform::onPiAux(const pi_AUX_t & msg)
 {
+  if (!debug_aux_pub_) {
+    return;
+  }
   const std::array<int16_t, 14> channels = {
     msg.aux_1, msg.aux_2, msg.aux_3, msg.aux_4, msg.aux_5, msg.aux_6, msg.aux_7,
     msg.aux_8, msg.aux_9, msg.aux_10, msg.aux_11, msg.aux_12, msg.aux_13, msg.aux_14};
@@ -840,6 +858,11 @@ void IndiflightPlatform::onPiStatus(const pi_PI_STATUS_t & msg)
 
   updatePlatformState(armed, override_active);
 
+  // Debug
+  if (!debug_pi_status_pub_) {
+    return;
+  }
+
   as2_msgs::msg::UInt16MultiArrayStamped debug_msg;
   debug_msg.layout.dim.resize(1);
   debug_msg.layout.dim[0].size = 3;
@@ -853,6 +876,9 @@ void IndiflightPlatform::onPiStatus(const pi_PI_STATUS_t & msg)
 
 void IndiflightPlatform::publishDebugRc()
 {
+  if (!debug_rc_command_pub_) {
+    return;
+  }
   // Assign the values from `channel_values_` to the `debug_rc_` message
   debug_rc_command_.data = channel_values_;
 
