@@ -765,13 +765,15 @@ void IndiflightPlatform::onExternalRigidBodies(
     geometry_msgs::msg::PoseStamped pose;
     pose.header = msg->header;
     pose.pose = body.pose;
-    if (!toEarthFrame(pose)) {
-      RCLCPP_WARN_THROTTLE(
-        this->get_logger(), *this->get_clock(), 1000,
-        "Rigid body '%s' in frame '%s', could not convert to '%s' - dropped",
-        body.rigid_body_name.c_str(), pose.header.frame_id.c_str(), earth_frame_id_.c_str());
-      return;
-    }
+    // if (!toEarthFrame(pose)) {
+    //   RCLCPP_WARN_THROTTLE(
+    //     this->get_logger(), *this->get_clock(), 1000,
+    //     "Rigid body '%s' in frame '%s', could not convert to '%s' - dropped",
+    //     body.rigid_body_name.c_str(), pose.header.frame_id.c_str(), earth_frame_id_.c_str());
+    //   return;
+    // }
+    // msg from mocap should be in earth frame
+    pose.header.frame_id = earth_frame_id_;
     sendExternalPose(pose);
     return;
   }
