@@ -36,6 +36,7 @@
 */
 
 #include <array>
+#include <cinttypes>
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -151,6 +152,10 @@ IndiflightPlatform::IndiflightPlatform(const rclcpp::NodeOptions & options)
         earth_frame_id_.c_str(), base_link_frame_id_.c_str(), external_pose_rate_);
     }
   }
+
+  // One second never trips on a healthy link: EKF_INPUTS alone arrives at 500Hz.
+  link_check_timer_ = this->create_wall_timer(
+    std::chrono::seconds(1), std::bind(&IndiflightPlatform::checkLink, this));
 
   // Clear layout dimensions if they were set in a previous publication
   debug_rc_command_.layout.dim.clear();
@@ -872,6 +877,33 @@ void IndiflightPlatform::onPiStatus(const pi_PI_STATUS_t & msg)
     static_cast<uint16_t>(rx_link_valid)};
   debug_msg.stamp = fcStamp(msg.time_us);
   debug_pi_status_pub_->publish(debug_msg);
+}
+
+void IndiflightPlatform::checkLink()
+{
+  const pi_protocol::LinkStats stats = pi_protocol_client_.stats();
+  if (stats.frames_parsed > 0) {
+    link_check_timer_->cancel();
+    RCLCPP_INFO_STREAM(
+      this->get_logger(),
+      "FC link up: " << stats.frames_parsed << " frames decoded from " <<
+        stats.bytes_read << " bytes");
+    return;
+  }
+  if (stats.bytes_read == 0) {
+    RCLCPP_WARN_STREAM_THROTTLE(
+      this->get_logger(), *this->get_clock(), 5000,
+      "No bytes from the FC on " << pi_protocol_device_ << ". The port opened, so the FC is "
+        "not sending: check that FUNCTION_TELEMETRY_PI is assigned to this port in the "
+        "firmware, and that it is the one wired here.");
+    return;
+  }
+  RCLCPP_WARN_STREAM_THROTTLE(
+    this->get_logger(), *this->get_clock(), 5000,
+    stats.bytes_read << " bytes from the FC but no frame decoded (" << stats.frames_gated <<
+      " rejected by the stamp gate). The link carries data that does not parse: the firmware "
+      "is most likely built against a different pi-protocol message table, or a different "
+      "baudrate.");
 }
 
 void IndiflightPlatform::publishDebugRc()

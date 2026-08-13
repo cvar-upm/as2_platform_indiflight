@@ -105,6 +105,15 @@ private:
  * @brief Host-side client for indiflight's pi-protocol telemetry channel.
  *
  */
+/// Link counters, for telling "nothing arrives" from "arrives and does not
+/// parse" without a logic analyser. Monotonic since connect().
+struct LinkStats
+{
+  uint64_t bytes_read;      ///< Bytes off the serial port.
+  uint64_t frames_parsed;   ///< Frames that passed framing and CRC.
+  uint64_t frames_gated;    ///< Parsed but dropped by the FC stamp gate.
+};
+
 class Client
 {
 public:
@@ -220,6 +229,13 @@ public:
    * @return true on a successful write. false until the first downlink message
    *         has been parsed, since there is no FC tick to stamp with yet.
    */
+  /**
+   * @brief Link counters since connect().
+   *
+   * @return Bytes read, frames parsed and frames dropped by the stamp gate.
+   */
+  LinkStats stats() const;
+
   bool sendPosSetpoint(
     float ned_x, float ned_y, float ned_z,
     float ned_xd, float ned_yd, float ned_zd, float yaw_deg);
@@ -273,6 +289,9 @@ private:
   // Reader-thread-only gate; its accepted tick is mirrored into the atomics
   // below for the TX methods, which run on the ROS executor thread.
   FcStampGate stamp_gate_;
+  std::atomic<uint64_t> bytes_read_{0};
+  std::atomic<uint64_t> frames_parsed_{0};
+  std::atomic<uint64_t> frames_gated_{0};
   std::atomic<uint32_t> last_fc_time_us_{0};
   std::atomic<bool> fc_time_valid_{false};
 

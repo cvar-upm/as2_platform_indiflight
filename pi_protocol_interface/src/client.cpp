@@ -172,6 +172,14 @@ void Client::disconnect()
   }
 }
 
+LinkStats Client::stats() const
+{
+  return LinkStats{
+    bytes_read_.load(std::memory_order_relaxed),
+    frames_parsed_.load(std::memory_order_relaxed),
+    frames_gated_.load(std::memory_order_relaxed)};
+}
+
 void Client::readLoop()
 {
   // Runs the stamp gate and, on acceptance, mirrors the newest FC tick into
@@ -188,10 +196,15 @@ void Client::readLoop()
 
   // One dispatch shape per message: null-check the double-buffered Rx
   // pointer, run the stamp gate, then invoke the callback if one is set.
-  const auto deliver = [&gate](auto * rx_msg, const auto & callback) {
-      if (rx_msg == nullptr || !gate(rx_msg->time_us)) {
+  const auto deliver = [this, &gate](auto * rx_msg, const auto & callback) {
+      if (rx_msg == nullptr) {
         return;
       }
+      if (!gate(rx_msg->time_us)) {
+        frames_gated_.fetch_add(1, std::memory_order_relaxed);
+        return;
+      }
+      frames_parsed_.fetch_add(1, std::memory_order_relaxed);
       if (callback) {
         callback(*rx_msg);
       }
@@ -206,6 +219,7 @@ void Client::readLoop()
       }
       break;  // real error, e.g. device unplugged
     }
+    bytes_read_.fetch_add(static_cast<uint64_t>(n), std::memory_order_relaxed);
     for (ssize_t i = 0; i < n; i++) {
       switch (piParse(&parse_state_, buf[i])) {
         case PI_MSG_EKF_INPUTS_ID:

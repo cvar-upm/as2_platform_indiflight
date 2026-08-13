@@ -266,6 +266,12 @@ private:
   bool acceptHover();
 
   /**
+   * @brief Report the state of the FC link while no message has been decoded,
+   * so a silent FC is distinguishable from a stream that does not parse.
+   */
+  void checkLink();
+
+  /**
    * @brief Latch the current pose as the hover reference, so that a switch to
    * HOVER holds where the vehicle is rather than wherever it was last told to
    * go, and works coming from ACRO too, where the FC has no setpoint at all.
@@ -439,6 +445,11 @@ private:
   // auto-prefixes "sensor_measurements/" the same way imu_sensor_ptr_/
   // battery_sensor_ptr_ do).
   std::unique_ptr<as2::sensors::Sensor<sensor_msgs::msg::JointState>> motor_sensor_ptr_;
+
+  // Watchdog over the FC link. Bytes arriving without frames decoding means a
+  // message table or baudrate mismatch; no bytes at all means the FC is not
+  // sending, and neither is visible from the topics alone.
+  rclcpp::TimerBase::SharedPtr link_check_timer_;
 
   // Debug publishers
   std::string debug_rc_command_topic_;
