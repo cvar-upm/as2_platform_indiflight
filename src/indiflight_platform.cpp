@@ -59,13 +59,6 @@ namespace
  * @brief Name of a mocap rigid body, accepting both the string form and the
  * integer an unquoted numeric name yields in YAML.
  */
-std::string rigidBodyName(const rclcpp::Parameter & param)
-{
-  if (param.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
-    return std::to_string(param.as_int());
-  }
-  return param.as_string();
-}
 }  // namespace
 
 IndiflightPlatform::IndiflightPlatform(const rclcpp::NodeOptions & options)
@@ -171,53 +164,53 @@ IndiflightPlatform::IndiflightPlatform(const rclcpp::NodeOptions & options)
 
 void IndiflightPlatform::readParameters()
 {
-  getParam("external_odom", external_odom_);
+  external_odom_ = getParameter<bool>("external_odom");
 
   base_link_frame_id_ = as2::tf::generateTfName(this, "base_link");
   odom_frame_id_ = as2::tf::generateTfName(this, "odom");
   // Not namespaced, unlike the two above: the global reference is shared.
   earth_frame_id_ = "earth";
-  getParam("global_ref_frame", earth_frame_id_, true);
+  earth_frame_id_ = getParameter("global_ref_frame", earth_frame_id_);
 
-  getParam("pi_protocol.device", pi_protocol_device_);
-  getParam("pi_protocol.baudrate", pi_protocol_baudrate_);
+  pi_protocol_device_ = getParameter<std::string>("pi_protocol.device");
+  pi_protocol_baudrate_ = getParameter<int>("pi_protocol.baudrate");
 
   // true: header.stamp is the FC sample instant reconstructed by
   // pi_protocol_clock_sync_. false: the arrival time, as elsewhere in AS2.
   // debug/platform/og_timestamp carries the raw FC time_ref either way.
-  getParam("use_fcu_stamps", use_fcu_stamps_, true);
-  getParam("num_rotors", num_rotors_, true);
+  use_fcu_stamps_ = getParameter("use_fcu_stamps", use_fcu_stamps_);
+  num_rotors_ = getParameter("num_rotors", num_rotors_);
   if (num_rotors_ < 1 || num_rotors_ > 6) {
     throw std::runtime_error("num_rotors must be in [1, 6]");
   }
-  getParam("debug_topics.rc_command", debug_rc_command_topic_, true);
-  getParam("debug_topics.og_timestamp", debug_og_timestamp_topic_, true);
-  getParam("debug_topics.pi_status", debug_pi_status_topic_, true);
-  getParam("debug_topics.aux", debug_aux_topic_, true);
+  debug_rc_command_topic_ = getParameter("debug_topics.rc_command", debug_rc_command_topic_);
+  debug_og_timestamp_topic_ = getParameter("debug_topics.og_timestamp", debug_og_timestamp_topic_);
+  debug_pi_status_topic_ = getParameter("debug_topics.pi_status", debug_pi_status_topic_);
+  debug_aux_topic_ = getParameter("debug_topics.aux", debug_aux_topic_);
 
-  getParam("imu.covariance.gyro", imu_gyro_covariance_, true);
-  getParam("imu.covariance.accel", imu_accel_covariance_, true);
+  imu_gyro_covariance_ = getParameter("imu.covariance.gyro", imu_gyro_covariance_);
+  imu_accel_covariance_ = getParameter("imu.covariance.accel", imu_accel_covariance_);
 
   // Rotation (rad) from indiflight's FRD firmware frame to the body frame.
   // The default r = pi is FRD -> FLU.
   desired_frame_roll_ = M_PI;
-  getParam("desired_frame_T.r", desired_frame_roll_, true);
-  getParam("desired_frame_T.p", desired_frame_pitch_, true);
-  getParam("desired_frame_T.y", desired_frame_yaw_, true);
+  desired_frame_roll_ = getParameter("desired_frame_T.r", desired_frame_roll_);
+  desired_frame_pitch_ = getParameter("desired_frame_T.p", desired_frame_pitch_);
+  desired_frame_yaw_ = getParameter("desired_frame_T.y", desired_frame_yaw_);
   desired_frame_rotation_ =
     (Eigen::AngleAxisd(desired_frame_yaw_, Eigen::Vector3d::UnitZ()) *
     Eigen::AngleAxisd(desired_frame_pitch_, Eigen::Vector3d::UnitY()) *
     Eigen::AngleAxisd(desired_frame_roll_, Eigen::Vector3d::UnitX())).toRotationMatrix();
 
   // Command limits
-  getParam("thrust.max", max_thrust_);
-  getParam("thrust.min", min_thrust_);
-  getParam("roll_rate.max", max_roll_rate_);
-  getParam("roll_rate.min", min_roll_rate_);
-  getParam("pitch_rate.max", max_pitch_rate_);
-  getParam("pitch_rate.min", min_pitch_rate_);
-  getParam("yaw_rate.max", max_yaw_rate_);
-  getParam("yaw_rate.min", min_yaw_rate_);
+  max_thrust_ = getParameter<double>("thrust.max");
+  min_thrust_ = getParameter<double>("thrust.min");
+  max_roll_rate_ = getParameter<double>("roll_rate.max");
+  min_roll_rate_ = getParameter<double>("roll_rate.min");
+  max_pitch_rate_ = getParameter<double>("pitch_rate.max");
+  min_pitch_rate_ = getParameter<double>("pitch_rate.min");
+  max_yaw_rate_ = getParameter<double>("yaw_rate.max");
+  min_yaw_rate_ = getParameter<double>("yaw_rate.min");
   // Convert limits from deg/s to rad/s for the control slopes and the limiters.
   max_roll_rate_ = convert_deg_s_to_rad_s(max_roll_rate_);
   min_roll_rate_ = convert_deg_s_to_rad_s(min_roll_rate_);
@@ -227,16 +220,16 @@ void IndiflightPlatform::readParameters()
   min_yaw_rate_ = convert_deg_s_to_rad_s(min_yaw_rate_);
   computeControlSlopes();
 
-  getParam("use_thrust_map", use_thrust_map_);
-  getParam("limit_output", limit_output_);
-  getParam("limit_roll_percent", limit_roll_percent_);
-  getParam("limit_pitch_percent", limit_pitch_percent_);
-  getParam("limit_yaw_percent", limit_yaw_percent_);
-  getParam("limit_thrust_percent", limit_thrust_percent_);
+  use_thrust_map_ = getParameter<bool>("use_thrust_map");
+  limit_output_ = getParameter<bool>("limit_output");
+  limit_roll_percent_ = getParameter<double>("limit_roll_percent");
+  limit_pitch_percent_ = getParameter<double>("limit_pitch_percent");
+  limit_yaw_percent_ = getParameter<double>("limit_yaw_percent");
+  limit_thrust_percent_ = getParameter<double>("limit_thrust_percent");
 
-  getParam("alpha_voltage", alpha_voltage_);
-  getParam("min_cell_voltage", min_cell_voltage_);
-  getParam("max_cell_voltage", max_cell_voltage_);
+  alpha_voltage_ = getParameter<double>("alpha_voltage");
+  min_cell_voltage_ = getParameter<double>("min_cell_voltage");
+  max_cell_voltage_ = getParameter<double>("max_cell_voltage");
 
   // Pose forwarded to the FC's onboard EKF as EXTERNAL_POSE (NED), in every
   // control mode. The non-empty topic parameter selects the source:
@@ -245,21 +238,21 @@ void IndiflightPlatform::readParameters()
   //   mocap_topic set -> that mocap4r2_msgs/RigidBodies topic, body picked by
   //                      rigid_body_name
   // Feeding the FC from TF while AS2 consumes the FC estimate would be a loop.
-  getParam("external_pose.enable", external_pose_enable_);
+  external_pose_enable_ = getParameter<bool>("external_pose.enable");
   if (external_pose_enable_) {
-    getParam("external_pose.rate", external_pose_rate_, true);
-    getParam("external_pose.pose_topic", external_pose_pose_topic_, true);
+    external_pose_rate_ = getParameter("external_pose.rate", external_pose_rate_);
+    external_pose_pose_topic_ = getParameter("external_pose.pose_topic", external_pose_pose_topic_);
     if (external_pose_pose_topic_.empty()) {
-      getParam("external_pose.mocap_topic", external_pose_mocap_topic_, true);
+      external_pose_mocap_topic_ = getParameter(
+        "external_pose.mocap_topic",
+        external_pose_mocap_topic_);
       if (!external_pose_mocap_topic_.empty()) {
-        getParam("external_pose.rigid_body_name", external_pose_rigid_body_name_);
+        external_pose_rigid_body_name_ = getParameter<std::string>("external_pose.rigid_body_name");
         if (external_pose_rigid_body_name_.empty()) {
           RCLCPP_FATAL(
             this->get_logger(),
             "external_pose.rigid_body_name must be set when external_pose.mocap_topic is set");
         }
-        external_pose_rigid_body_name_ =
-          rigidBodyName(this->get_parameter("external_pose.rigid_body_name"));
       }
     }
     if (!external_pose_pose_topic_.empty() && !external_pose_mocap_topic_.empty()) {
