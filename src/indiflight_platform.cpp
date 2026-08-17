@@ -35,6 +35,7 @@
 *          Francisco José Anguita Chamorro
 */
 
+#include <algorithm>
 #include <array>
 #include <cinttypes>
 #include <chrono>
@@ -95,17 +96,17 @@ IndiflightPlatform::IndiflightPlatform(const rclcpp::NodeOptions & options)
     debug_pi_status_pub_ = this->create_publisher<as2_msgs::msg::UInt16MultiArrayStamped>(
       debug_pi_status_topic_, 1);
   }
-  if (!debug_aux_topic_.empty()) {
-    debug_aux_pub_ = this->create_publisher<as2_msgs::msg::UInt16MultiArrayStamped>(
-      debug_aux_topic_, 1);
+  if (!debug_rc_topic_.empty()) {
+    debug_rc_pub_ = this->create_publisher<as2_msgs::msg::UInt16MultiArrayStamped>(
+      debug_rc_topic_, 1);
   }
 
   // Callbacks are registered unconditionally: a firmware build that does not
   // emit one of these messages never triggers its callback.
   pi_protocol_client_.setEkfInputsCallback(
     [this](const pi_EKF_INPUTS_t & msg) {onPiProtocolEkfInputs(msg);});
-  pi_protocol_client_.setAuxCallback(
-    [this](const pi_AUX_t & msg) {onPiAux(msg);});
+  pi_protocol_client_.setRcCallback(
+    [this](const pi_RC_t & msg) {onPiRc(msg);});
   pi_protocol_client_.setStatusCallback(
     [this](const pi_PI_STATUS_t & msg) {onPiStatus(msg);});
   pi_protocol_client_.setBatteryCallback(
@@ -193,7 +194,7 @@ void IndiflightPlatform::readParameters()
   getParam("debug_topics.rc_command", debug_rc_command_topic_, true);
   getParam("debug_topics.og_timestamp", debug_og_timestamp_topic_, true);
   getParam("debug_topics.pi_status", debug_pi_status_topic_, true);
-  getParam("debug_topics.aux", debug_aux_topic_, true);
+  getParam("debug_topics.rc", debug_rc_topic_, true);
 
   getParam("imu.covariance.gyro", imu_gyro_covariance_, true);
   getParam("imu.covariance.accel", imu_accel_covariance_, true);
@@ -208,6 +209,11 @@ void IndiflightPlatform::readParameters()
     (Eigen::AngleAxisd(desired_frame_yaw_, Eigen::Vector3d::UnitZ()) *
     Eigen::AngleAxisd(desired_frame_pitch_, Eigen::Vector3d::UnitY()) *
     Eigen::AngleAxisd(desired_frame_roll_, Eigen::Vector3d::UnitX())).toRotationMatrix();
+
+  getParam("mass", mass_);
+  if (mass_ <= 0.0) {
+    throw std::runtime_error("mass must be strictly positive, it divides the commanded thrust");
+  }
 
   // Command limits
   getParam("thrust.max", max_thrust_);
@@ -300,10 +306,9 @@ void IndiflightPlatform::configureSensors()
 
 void IndiflightPlatform::initChannels()
 {
-  // 0 roll, 1 pitch, 2 throttle, 3 yaw: the 4 channels RC_OVERRIDE carries.
-  // ARM, offboard and killswitch live on the physical radio, outside it.
+  // Sticks centred, throttle at minimum, every other channel at midpoint.
   channel_values_.clear();
-  channel_values_.resize(4, 1000);
+  channel_values_.resize(4, 1500);
   channel_values_[RC_CHANNELS::ROLL] = 1500;
   channel_values_[RC_CHANNELS::PITCH] = 1500;
   channel_values_[RC_CHANNELS::THROTTLE] = 1000;
@@ -312,8 +317,8 @@ void IndiflightPlatform::initChannels()
 
 bool IndiflightPlatform::ownSetArmingState(bool state)
 {
-  // ARM lives on the physical radio, outside RC_OVERRIDE's 4 channels. The
-  // actual state is read back via PI_STATUS in onPiStatus().
+  // The firmware refuses the arming channel to PI OVERRIDE, so this node cannot
+  // arm whatever it sends. The actual state is read back via PI_STATUS.
   RCLCPP_WARN(
     this->get_logger(),
     "Arming is physical-radio-controlled on this platform - AS2 cannot arm/disarm it. "
@@ -324,12 +329,12 @@ bool IndiflightPlatform::ownSetArmingState(bool state)
 
 bool IndiflightPlatform::ownSetOffboardControl(bool offboard)
 {
-  // Same reasoning as ownSetArmingState(): the PI OVERRIDE AUX switch lives on
-  // the physical radio. Actual offboard (= PI_OVERRIDE_ACTIVE) state is read
-  // back via PI_STATUS in onPiStatus().
+  // Same reasoning as ownSetArmingState(): the firmware also refuses the channel
+  // carrying PI OVERRIDE, so control is handed over by the pilot alone. The
+  // actual state is read back via PI_STATUS in onPiStatus().
   RCLCPP_WARN(
     this->get_logger(),
-    "Offboard is driven by the PI OVERRIDE AUX switch on the physical radio - AS2 cannot set "
+    "Offboard is driven by the PI OVERRIDE switch on the physical radio - AS2 cannot set "
     "it. Actual state is reported via pi-protocol PI_STATUS.");
   (void)offboard;
   return false;
@@ -352,6 +357,17 @@ bool IndiflightPlatform::ownSetPlatformControlMode(const as2_msgs::msg::ControlM
         return false;
       }
       break;
+    case as2_msgs::msg::ControlMode::SPEED:
+      if (!acceptFcPositionControl("SPEED")) {
+        return false;
+      }
+      break;
+    case as2_msgs::msg::ControlMode::TRAJECTORY:
+      if (!acceptFcPositionControl("TRAJECTORY")) {
+        return false;
+      }
+      break;
+    case as2_msgs::msg::ControlMode::ATTITUDE:
     case as2_msgs::msg::ControlMode::ACRO:
       break;
     default:
@@ -373,6 +389,12 @@ bool IndiflightPlatform::ownSendCommand()
       return sendPositionCommand();
     case as2_msgs::msg::ControlMode::HOVER:
       return sendHoverCommand();
+    case as2_msgs::msg::ControlMode::SPEED:
+      return sendSpeedCommand();
+    case as2_msgs::msg::ControlMode::TRAJECTORY:
+      return sendTrajectoryCommand();
+    case as2_msgs::msg::ControlMode::ATTITUDE:
+      return sendAttitudeCommand();
     case as2_msgs::msg::ControlMode::ACRO:
       return sendAcroCommand();
     case as2_msgs::msg::ControlMode::UNSET:
@@ -492,25 +514,143 @@ bool IndiflightPlatform::sendPositionCommand()
     return false;
   }
 
-  return sendPoseSetpoint(pose);
+  // In POSITION mode the twist reference is a speed limit, which go_to fills in
+  const Eigen::Vector3d limit_ned = enuToNed(
+    Eigen::Vector3d(
+      command_twist_msg_.twist.linear.x, command_twist_msg_.twist.linear.y,
+      command_twist_msg_.twist.linear.z));
+
+  return sendPoseSetpoint(pose, limit_ned, SETPOINT_POSITION);
 }
 
-bool IndiflightPlatform::sendPoseSetpoint(const geometry_msgs::msg::PoseStamped & pose)
+bool IndiflightPlatform::sendSpeedCommand()
 {
+  const Eigen::Vector3d vel_ned = enuToNed(
+    Eigen::Vector3d(
+      command_twist_msg_.twist.linear.x, command_twist_msg_.twist.linear.y,
+      command_twist_msg_.twist.linear.z));
+
+  // The FC tracks yaw as an absolute angle in every mode, so the reference is
+  // the pose command's yaw, which as2 keeps populated alongside the twist.
+  geometry_msgs::msg::PoseStamped yaw_ref = command_pose_msg_;
+  if (yaw_ref.header.frame_id.empty()) {
+    yaw_ref.pose.orientation.w = 1.0;
+  }
+
+  return sendPoseSetpoint(yaw_ref, vel_ned, SETPOINT_VELOCITY);
+}
+
+bool IndiflightPlatform::sendTrajectoryCommand()
+{
+  if (command_trajectory_msg_.setpoints.empty()) {
+    RCLCPP_WARN_THROTTLE(
+      this->get_logger(), *this->get_clock(), 1000,
+      "TRAJECTORY mode active but no setpoint received yet - not sent");
+    return false;
+  }
+
+  const auto & setpoint = command_trajectory_msg_.setpoints.front();
+
+  geometry_msgs::msg::PoseStamped pose;
+  pose.header = command_trajectory_msg_.header;
+  pose.pose.position.x = setpoint.position.x;
+  pose.pose.position.y = setpoint.position.y;
+  pose.pose.position.z = setpoint.position.z;
+  as2::frame::eulerToQuaternion(0.0, 0.0, setpoint.yaw_angle, pose.pose.orientation);
+  if (!toEarthFrame(pose)) {
+    RCLCPP_ERROR_THROTTLE(
+      this->get_logger(), *this->get_clock(), 1000,
+      "TRAJECTORY command in frame '%s', could not convert to '%s' - not sent",
+      pose.header.frame_id.c_str(), earth_frame_id_.c_str());
+    return false;
+  }
+
+  const Eigen::Vector3d vel_ned = enuToNed(
+    Eigen::Vector3d(setpoint.twist.x, setpoint.twist.y, setpoint.twist.z));
+
+  return sendPoseSetpoint(pose, vel_ned, SETPOINT_TRAJECTORY);
+}
+
+float IndiflightPlatform::yawRateForMode(uint8_t & mode)
+{
+  if (getControlMode().yaw_mode != as2_msgs::msg::ControlMode::YAW_SPEED) {
+    return 0.0f;
+  }
+  mode |= SETPOINT_YAW_RATE;
+  // ENU to NED reverses the sense of rotation about the vertical axis
+  return static_cast<float>(-command_twist_msg_.twist.angular.z);
+}
+
+bool IndiflightPlatform::sendPoseSetpoint(
+  const geometry_msgs::msg::PoseStamped & pose,
+  const Eigen::Vector3d & vel_ned, uint8_t mode)
+{
+  const float yaw_rate_ned = yawRateForMode(mode);
   const Eigen::Vector3d ned = enuToNed(
     Eigen::Vector3d(pose.pose.position.x, pose.pose.position.y, pose.pose.position.z));
-  const double yaw_ned_deg = yawEnuRadToNedDeg(
+  const double yaw_ned = yawEnuRadToNedRad(
     as2::frame::getYawFromQuaternion(pose.pose.orientation));
 
-  // Velocity feed-forward zero: in POSITION mode the twist reference is a
-  // speed limit, not a feed-forward. TRAJECTORY mode would carry one.
-  if (!pi_protocol_client_.sendPosSetpoint(
+  const float scalar_c = (mode & SETPOINT_YAW_RATE) ?
+    yaw_rate_ned : static_cast<float>(yaw_ned);
+
+  if (!pi_protocol_client_.sendSetpoint(
       static_cast<float>(ned.x()), static_cast<float>(ned.y()), static_cast<float>(ned.z()),
-      0.0f, 0.0f, 0.0f, static_cast<float>(yaw_ned_deg)))
+      static_cast<float>(vel_ned.x()), static_cast<float>(vel_ned.y()),
+      static_cast<float>(vel_ned.z()), scalar_c, mode))
   {
     RCLCPP_WARN_THROTTLE(
       this->get_logger(), *this->get_clock(), 1000,
-      "Could not send POS_SETPOINT (no FC downlink tick yet, or write failed)");
+      "Could not send SETPOINT (no FC downlink tick yet, or write failed)");
+    return false;
+  }
+  return true;
+}
+
+Eigen::Vector3d IndiflightPlatform::specificForceFrd() const
+{
+  const double thrust = std::clamp<double>(command_thrust_msg_.thrust, min_thrust_, max_thrust_);
+  return fluToFrd(Eigen::Vector3d(0.0, 0.0, thrust / mass_));
+}
+
+bool IndiflightPlatform::sendAttitudeCommand()
+{
+  const Eigen::Quaterniond q_ned_frd = enuFluToNedFrd(
+    Eigen::Quaterniond(
+      command_pose_msg_.pose.orientation.w, command_pose_msg_.pose.orientation.x,
+      command_pose_msg_.pose.orientation.y, command_pose_msg_.pose.orientation.z));
+  const Eigen::Vector3d spf = specificForceFrd();
+
+  if (!pi_protocol_client_.sendSetpoint(
+      static_cast<float>(q_ned_frd.x()), static_cast<float>(q_ned_frd.y()),
+      static_cast<float>(q_ned_frd.z()), static_cast<float>(spf.x()),
+      static_cast<float>(spf.y()), static_cast<float>(spf.z()),
+      static_cast<float>(q_ned_frd.w()), SETPOINT_ATTITUDE))
+  {
+    RCLCPP_WARN_THROTTLE(
+      this->get_logger(), *this->get_clock(), 1000,
+      "Could not send ATTITUDE SETPOINT to the flight controller");
+    return false;
+  }
+  return true;
+}
+
+bool IndiflightPlatform::sendAcroSetpoint()
+{
+  const Eigen::Vector3d rates = fluToFrd(
+    Eigen::Vector3d(
+      command_twist_msg_.twist.angular.x, command_twist_msg_.twist.angular.y,
+      command_twist_msg_.twist.angular.z));
+  const Eigen::Vector3d spf = specificForceFrd();
+
+  if (!pi_protocol_client_.sendSetpoint(
+      static_cast<float>(rates.x()), static_cast<float>(rates.y()),
+      static_cast<float>(rates.z()), static_cast<float>(spf.x()),
+      static_cast<float>(spf.y()), static_cast<float>(spf.z()), 0.0f, SETPOINT_ACRO))
+  {
+    RCLCPP_WARN_THROTTLE(
+      this->get_logger(), *this->get_clock(), 1000,
+      "Could not send ACRO SETPOINT to the flight controller");
     return false;
   }
   return true;
@@ -518,6 +658,11 @@ bool IndiflightPlatform::sendPoseSetpoint(const geometry_msgs::msg::PoseStamped 
 
 bool IndiflightPlatform::sendAcroCommand()
 {
+  // The pilot's switch picks the offboard language, and the two are exclusive
+  if (fc_pos_ctl_active_) {
+    return sendAcroSetpoint();
+  }
+
   double thrust = this->command_thrust_msg_.thrust;
   double roll = this->command_twist_msg_.twist.angular.x;
   double pitch = this->command_twist_msg_.twist.angular.y;
@@ -703,25 +848,27 @@ void IndiflightPlatform::updatePlatformState(bool armed, bool offboard)
   }
 }
 
-void IndiflightPlatform::onPiAux(const pi_AUX_t & msg)
+void IndiflightPlatform::onPiRc(const pi_RC_t & msg)
 {
-  if (!debug_aux_pub_) {
+  if (!debug_rc_pub_) {
     return;
   }
-  const std::array<int16_t, 14> channels = {
-    msg.aux_1, msg.aux_2, msg.aux_3, msg.aux_4, msg.aux_5, msg.aux_6, msg.aux_7,
-    msg.aux_8, msg.aux_9, msg.aux_10, msg.aux_11, msg.aux_12, msg.aux_13, msg.aux_14};
+  const std::array<int16_t, 16> channels = {
+    msg.channel_1, msg.channel_2, msg.channel_3, msg.channel_4,
+    msg.channel_5, msg.channel_6, msg.channel_7, msg.channel_8,
+    msg.channel_9, msg.channel_10, msg.channel_11, msg.channel_12,
+    msg.channel_13, msg.channel_14, msg.channel_15, msg.channel_16};
 
   as2_msgs::msg::UInt16MultiArrayStamped debug_msg;
   debug_msg.layout.dim.resize(1);
   debug_msg.layout.dim[0].size = channels.size();
-  debug_msg.layout.dim[0].label = "aux_1..aux_14";
+  debug_msg.layout.dim[0].label = "channel_1..channel_16";
   debug_msg.data.reserve(channels.size());
   for (const int16_t value : channels) {
     debug_msg.data.emplace_back(static_cast<uint16_t>(std::max<int16_t>(value, 0)));
   }
   debug_msg.stamp = fcStamp(msg.time_us);
-  debug_aux_pub_->publish(debug_msg);
+  debug_rc_pub_->publish(debug_msg);
 }
 
 void IndiflightPlatform::sendExternalPoseFromTf()
@@ -815,20 +962,32 @@ void IndiflightPlatform::sendExternalPose(const geometry_msgs::msg::PoseStamped 
     return;
   }
 
-  // Velocity zero: the FC EKF measurement vector is position + quaternion
-  // only (flight/ekf.c ekf_Z), so the wire velocity is never fused.
+  // Mocap gives position and attitude; the velocity would have to be
+  // differentiated here and the FC would write it straight into the state.
   if (!pi_protocol_client_.sendExternalPose(
       *fc_time_us,
       static_cast<float>(ned.x()), static_cast<float>(ned.y()), static_cast<float>(ned.z()),
       0.0f, 0.0f, 0.0f,
       static_cast<float>(q_ned_frd.w()), static_cast<float>(q_ned_frd.x()),
-      static_cast<float>(q_ned_frd.y()), static_cast<float>(q_ned_frd.z())))
+      static_cast<float>(q_ned_frd.y()), static_cast<float>(q_ned_frd.z()),
+      EXT_POSE_USE_POS | EXT_POSE_USE_QUAT))
   {
     RCLCPP_WARN_THROTTLE(
       this->get_logger(), *this->get_clock(), 5000,
       "Could not send EXTERNAL_POSE to the flight controller");
     return;
   }
+
+  // The client reports success for a skipped pose, so the count is the only signal
+  const uint64_t skipped = pi_protocol_client_.stats().ext_pose_skipped;
+  if (skipped > ext_pose_skipped_seen_) {
+    ext_pose_skipped_seen_ = skipped;
+    RCLCPP_WARN_THROTTLE(
+      this->get_logger(), *this->get_clock(), 1000,
+      "EXTERNAL_POSE does not advance the FC tick (%" PRIu64 " dropped): the FC EKF is "
+      "not being corrected", skipped);
+  }
+
   last_external_pose_stamp_ns_ = stamp_ns;
 }
 
@@ -858,12 +1017,17 @@ void IndiflightPlatform::onPiStatus(const pi_PI_STATUS_t & msg)
   constexpr uint8_t kFlagArmed = 1 << 0;
   constexpr uint8_t kFlagPiOverrideActive = 1 << 1;
   constexpr uint8_t kFlagRxLinkValid = 1 << 2;
+  constexpr uint8_t kFlagEkfConverged = 1 << 3;
+  constexpr uint8_t kFlagPosCtlActive = 1 << 4;
 
   const bool armed = msg.flags & kFlagArmed;
   const bool override_active = msg.flags & kFlagPiOverrideActive;
   const bool rx_link_valid = msg.flags & kFlagRxLinkValid;
+  fc_ekf_converged_ = msg.flags & kFlagEkfConverged;
+  fc_pos_ctl_active_ = msg.flags & kFlagPosCtlActive;
 
-  updatePlatformState(armed, override_active);
+  // POS_CTL is the offboard family, PI OVERRIDE the manual one
+  updatePlatformState(armed, override_active || fc_pos_ctl_active_);
 
   // Debug
   if (!debug_pi_status_pub_) {
@@ -872,11 +1036,13 @@ void IndiflightPlatform::onPiStatus(const pi_PI_STATUS_t & msg)
 
   as2_msgs::msg::UInt16MultiArrayStamped debug_msg;
   debug_msg.layout.dim.resize(1);
-  debug_msg.layout.dim[0].size = 3;
-  debug_msg.layout.dim[0].label = "armed,pi_override_active,rx_link_valid";
+  debug_msg.layout.dim[0].size = 5;
+  debug_msg.layout.dim[0].label =
+    "armed,pi_override_active,rx_link_valid,ekf_converged,pos_ctl_active";
   debug_msg.data = {
     static_cast<uint16_t>(armed), static_cast<uint16_t>(override_active),
-    static_cast<uint16_t>(rx_link_valid)};
+    static_cast<uint16_t>(rx_link_valid), static_cast<uint16_t>(fc_ekf_converged_),
+    static_cast<uint16_t>(fc_pos_ctl_active_)};
   debug_msg.stamp = fcStamp(msg.time_us);
   debug_pi_status_pub_->publish(debug_msg);
 }

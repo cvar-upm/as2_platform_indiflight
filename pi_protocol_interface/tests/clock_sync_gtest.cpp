@@ -112,3 +112,39 @@ TEST(ClockSync, HandlesTimeUsWraparound)
     prev_synced_ns = synced_ns;
   }
 }
+
+TEST(ClockSync, RebuildsOffsetAfterFcRestart)
+{
+  ClockSync sync;
+  const int64_t true_offset_ns = 5'000'000;
+  const uint32_t step_us = 1000;
+
+  // Session one: the FC has been up for 180 s when the host connects.
+  uint32_t fc_time_us = 180'000'000;
+  int64_t host_now_ns = static_cast<int64_t>(fc_time_us) * 1000 + true_offset_ns;
+  for (int i = 0; i < 20; i++) {
+    EXPECT_EQ(sync.sync(fc_time_us, host_now_ns), host_now_ns);
+    fc_time_us += step_us;
+    host_now_ns += static_cast<int64_t>(step_us) * 1000;
+  }
+
+  // micros() restarts while the host clock keeps running, so the offset jumps by
+  // the whole previous uptime. Too small a backwards step to be a wraparound.
+  fc_time_us = 1000;
+  host_now_ns += 500'000'000;
+  const int64_t restart_offset_ns = host_now_ns - static_cast<int64_t>(fc_time_us) * 1000;
+  EXPECT_EQ(sync.sync(fc_time_us, host_now_ns), host_now_ns);
+
+  for (int i = 0; i < 20; i++) {
+    fc_time_us += step_us;
+    host_now_ns += static_cast<int64_t>(step_us) * 1000;
+    EXPECT_EQ(sync.sync(fc_time_us, host_now_ns), host_now_ns);
+  }
+
+  // The inverse direction is what stamps uplink messages.
+  const auto fc_stamp = sync.toFcTime(host_now_ns);
+  ASSERT_TRUE(fc_stamp.has_value());
+  EXPECT_EQ(*fc_stamp, fc_time_us);
+  EXPECT_EQ(
+    host_now_ns - static_cast<int64_t>(fc_time_us) * 1000, restart_offset_ns);
+}

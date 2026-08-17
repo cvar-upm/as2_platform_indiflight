@@ -49,14 +49,17 @@ extern "C" {
 // against the previous table stops parsing, silently.
 static_assert(PI_MSG_IMU_ID == 1, "IMU id drifted");
 static_assert(PI_MSG_EXTERNAL_POSE_ID == 3, "EXTERNAL_POSE id drifted");
-static_assert(PI_MSG_EXTERNAL_POSE_PAYLOAD_LEN == 44, "EXTERNAL_POSE layout drifted");
-static_assert(PI_MSG_POS_SETPOINT_ID == 4, "POS_SETPOINT id drifted");
-static_assert(PI_MSG_POS_SETPOINT_PAYLOAD_LEN == 32, "POS_SETPOINT layout drifted");
+static_assert(PI_MSG_EXTERNAL_POSE_PAYLOAD_LEN == 45, "EXTERNAL_POSE layout drifted");
+static_assert(PI_MSG_SETPOINT_ID == 4, "SETPOINT id drifted");
+static_assert(PI_MSG_SETPOINT_PAYLOAD_LEN == 33, "SETPOINT layout drifted");
 static_assert(PI_MSG_EKF_INPUTS_ID == 9, "EKF_INPUTS id drifted");
 static_assert(PI_MSG_EKF_INPUTS_PAYLOAD_LEN == 28, "EKF_INPUTS layout drifted (6 rotors)");
-static_assert(PI_MSG_AUX_ID == 12, "AUX id drifted");
-static_assert(PI_MSG_AUX_PAYLOAD_LEN == 32, "AUX layout drifted");
+static_assert(PI_MSG_RC_ID == 12, "RC id drifted");
+static_assert(PI_MSG_RC_PAYLOAD_LEN == 36, "RC layout drifted");
+static_assert(PI_MSG_TIMESYNC_ID == 16, "TIMESYNC id drifted");
+static_assert(PI_MSG_TIMESYNC_PAYLOAD_LEN == 16, "TIMESYNC layout drifted");
 static_assert(PI_MSG_RC_OVERRIDE_ID == 13, "RC_OVERRIDE id drifted");
+static_assert(PI_MSG_RC_OVERRIDE_PAYLOAD_LEN == 12, "RC_OVERRIDE layout drifted");
 static_assert(PI_MSG_PI_STATUS_ID == 14, "PI_STATUS id drifted");
 static_assert(PI_MSG_BATTERY_ID == 15, "BATTERY id drifted");
 
@@ -94,26 +97,16 @@ TEST(PiProtocolParser, RoundTripImuMessage)
   EXPECT_FLOAT_EQ(piMsgImuRx->z, 0.2f);
 }
 
-TEST(PiProtocolParser, RoundTripAuxMessage)
+TEST(PiProtocolParser, RoundTripRcMessage)
 {
-  piMsgAuxTx.time_us = 654321;
-  piMsgAuxTx.aux_1 = 1000;
-  piMsgAuxTx.aux_2 = 1500;
-  piMsgAuxTx.aux_3 = 2000;
-  piMsgAuxTx.aux_4 = 1100;
-  piMsgAuxTx.aux_5 = 900;
-  piMsgAuxTx.aux_6 = 1800;
-  piMsgAuxTx.aux_7 = 1000;
-  piMsgAuxTx.aux_8 = 1000;
-  piMsgAuxTx.aux_9 = 1000;
-  piMsgAuxTx.aux_10 = 1000;
-  piMsgAuxTx.aux_11 = 1000;
-  piMsgAuxTx.aux_12 = 1000;
-  piMsgAuxTx.aux_13 = 1000;
-  piMsgAuxTx.aux_14 = 1000;
+  piMsgRcTx.time_us = 654321;
+  piMsgRcTx.channel_1 = 1500;
+  piMsgRcTx.channel_2 = 988;
+  piMsgRcTx.channel_4 = 2012;
+  piMsgRcTx.channel_16 = 0;
 
   uint8_t buf[2 * PI_MAX_PACKET_LEN];
-  const unsigned int n = piAccumulateMsg(&piMsgAuxTx, buf);
+  const unsigned int n = piAccumulateMsg(&piMsgRcTx, buf);
   ASSERT_GT(n, 0u);
 
   pi_parse_states_t state{};
@@ -125,16 +118,40 @@ TEST(PiProtocolParser, RoundTripAuxMessage)
     }
   }
 
-  ASSERT_EQ(last_id, PI_MSG_AUX_ID);
-  ASSERT_NE(piMsgAuxRx, nullptr);
-  EXPECT_EQ(piMsgAuxRx->time_us, 654321u);
-  EXPECT_EQ(piMsgAuxRx->aux_1, 1000);
-  EXPECT_EQ(piMsgAuxRx->aux_2, 1500);
-  EXPECT_EQ(piMsgAuxRx->aux_3, 2000);
-  EXPECT_EQ(piMsgAuxRx->aux_4, 1100);
-  EXPECT_EQ(piMsgAuxRx->aux_5, 900);
-  EXPECT_EQ(piMsgAuxRx->aux_6, 1800);
-  EXPECT_EQ(piMsgAuxRx->aux_14, 1000);
+  ASSERT_EQ(last_id, PI_MSG_RC_ID);
+  ASSERT_NE(piMsgRcRx, nullptr);
+  EXPECT_EQ(piMsgRcRx->time_us, 654321u);
+  EXPECT_EQ(piMsgRcRx->channel_1, 1500);
+  EXPECT_EQ(piMsgRcRx->channel_2, 988);
+  EXPECT_EQ(piMsgRcRx->channel_4, 2012);
+  // A channel the receiver does not provide is sent as zero
+  EXPECT_EQ(piMsgRcRx->channel_16, 0);
+}
+
+TEST(PiProtocolParser, RoundTripTimesyncMessage)
+{
+  piMsgTimesyncTx.seq = 42;
+  piMsgTimesyncTx.host_ns = 1786658671732000000ull;
+  piMsgTimesyncTx.fc_time_us = 180001136u;
+
+  uint8_t buf[2 * PI_MAX_PACKET_LEN];
+  const unsigned int n = piAccumulateMsg(&piMsgTimesyncTx, buf);
+  ASSERT_GT(n, 0u);
+
+  pi_parse_states_t state{};
+  uint8_t last_id = PI_MSG_NONE_ID;
+  for (unsigned int i = 0; i < n; i++) {
+    const uint8_t id = piParse(&state, buf[i]);
+    if (id != PI_MSG_NONE_ID) {
+      last_id = id;
+    }
+  }
+
+  ASSERT_EQ(last_id, PI_MSG_TIMESYNC_ID);
+  ASSERT_NE(piMsgTimesyncRx, nullptr);
+  EXPECT_EQ(piMsgTimesyncRx->seq, 42u);
+  EXPECT_EQ(piMsgTimesyncRx->host_ns, 1786658671732000000ull);
+  EXPECT_EQ(piMsgTimesyncRx->fc_time_us, 180001136u);
 }
 
 TEST(FcStampGate, AcceptsMonotonicStream)
@@ -177,6 +194,25 @@ TEST(FcStampGate, ReseedsAfterFcReboot)
   // ...but a second consistent stamp re-seeds the clock.
   EXPECT_TRUE(gate.accept(52000));
   EXPECT_EQ(gate.last(), 52000u);
+}
+
+TEST(FcStampGate, SessionCountsOnlyRealReboots)
+{
+  pi_protocol::FcStampGate gate;
+  EXPECT_TRUE(gate.accept(3600000000u));
+  EXPECT_EQ(gate.session(), 0u);
+
+  // Ordinary traffic, jitter and a micros() wrap all stay in the same session:
+  // TX state keyed on the FC clock domain must survive them.
+  EXPECT_TRUE(gate.accept(3600002000u));
+  EXPECT_TRUE(gate.accept(3600001000u));
+  EXPECT_FALSE(gate.accept(0xDEADBEEF));
+  EXPECT_EQ(gate.session(), 0u);
+
+  // Only adopting a restarted clock opens a new session.
+  EXPECT_FALSE(gate.accept(50000));
+  EXPECT_TRUE(gate.accept(52000));
+  EXPECT_EQ(gate.session(), 1u);
 }
 
 TEST(FcStampGate, MicrosWrapIsAccepted)

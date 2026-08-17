@@ -54,6 +54,11 @@ int64_t ClockSync::sync(uint32_t fc_time_us, int64_t host_now_ns)
     if (last_fc_time_us_ - fc_time_us > kHalfRangeUs) {
       // fc_time_us wrapped (uint32_t microsecond counter, ~71.6 minute period).
       fc_time_epoch_us_ += kWrapPeriodUs;
+    } else {
+      // Too small to be a wrap: micros() restarted, so the offset is stale.
+      initialized_ = false;
+      fc_time_epoch_us_ = 0;
+      offset_valid_.store(false, std::memory_order_release);
     }
   }
   last_fc_time_us_ = fc_time_us;

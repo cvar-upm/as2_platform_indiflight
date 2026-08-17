@@ -47,6 +47,11 @@ Eigen::Vector3d enuToNed(const Eigen::Vector3d & enu)
   return {enu.y(), enu.x(), -enu.z()};
 }
 
+Eigen::Vector3d fluToFrd(const Eigen::Vector3d & flu)
+{
+  return {flu.x(), -flu.y(), -flu.z()};
+}
+
 Eigen::Quaterniond enuFluToNedFrd(const Eigen::Quaterniond & q_enu_flu)
 {
   // Half-turn about (1,1,0)/sqrt(2) and about x_body. Eigen takes (w, x, y, z).
@@ -55,14 +60,14 @@ Eigen::Quaterniond enuFluToNedFrd(const Eigen::Quaterniond & q_enu_flu)
   return (kEnuToNed * q_enu_flu * kFluToFrd).normalized();
 }
 
-double yawEnuRadToNedDeg(double yaw_enu_rad)
+double yawEnuRadToNedRad(double yaw_enu_rad)
 {
-  double yaw_ned_deg = 90.0 - yaw_enu_rad * 180.0 / M_PI;
-  yaw_ned_deg = std::fmod(yaw_ned_deg + 180.0, 360.0);
-  if (yaw_ned_deg < 0.0) {
-    yaw_ned_deg += 360.0;
+  double yaw_ned_rad = M_PI_2 - yaw_enu_rad;
+  yaw_ned_rad = std::fmod(yaw_ned_rad + M_PI, 2.0 * M_PI);
+  if (yaw_ned_rad < 0.0) {
+    yaw_ned_rad += 2.0 * M_PI;
   }
-  return yaw_ned_deg - 180.0;
+  return yaw_ned_rad - M_PI;
 }
 
 }  // namespace as2_platform_indiflight
