@@ -344,7 +344,7 @@ bool IndiflightPlatform::ownSetPlatformControlMode(const as2_msgs::msg::ControlM
         return false;
       }
       break;
-    case as2_msgs::msg::ControlMode::ACRO:
+    case as2_msgs::msg::ControlMode::BODY_RATES:
       break;
     default:
       RCLCPP_ERROR(
@@ -365,7 +365,7 @@ bool IndiflightPlatform::ownSendCommand()
       return sendPositionCommand();
     case as2_msgs::msg::ControlMode::HOVER:
       return sendHoverCommand();
-    case as2_msgs::msg::ControlMode::ACRO:
+    case as2_msgs::msg::ControlMode::BODY_RATES:
       return sendAcroCommand();
     case as2_msgs::msg::ControlMode::UNSET:
       RCLCPP_WARN_THROTTLE(

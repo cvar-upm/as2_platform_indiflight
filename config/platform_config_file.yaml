@@ -15,7 +15,7 @@
       rigid_body_name: ""  # Body to forward. Required with mocap_topic
       rate: 100.0  # Hz of the earth->base_link TF poll, used when no topic is set
     debug_topics:  # Set any to "" to not create that publisher at all
-      rc_command: "debug/platform/rc_command"  # RC_OVERRIDE pulses sent, ACRO only
+      rc_command: "debug/platform/rc_command"  # RC_OVERRIDE pulses sent, BODY_RATES only
       og_timestamp: "debug/platform/og_timestamp"  # Raw FC time_us, one per IMU sample
       pi_status: "debug/platform/pi_status"  # armed, position mode, rx link valid
       aux: "debug/platform/aux"  # RC aux channels as the FC sees them

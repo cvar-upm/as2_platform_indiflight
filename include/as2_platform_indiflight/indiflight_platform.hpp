@@ -251,7 +251,7 @@ private:
   void updatePlatformState(bool armed, bool offboard);
 
   /**
-   * @brief Send the ACRO references (command_twist_msg_ body rates and
+   * @brief Send the BODY_RATES references (command_twist_msg_ body rates and
    * command_thrust_msg_) as RC_OVERRIDE stick pulses, saturated and mapped
    * through the rate limits and the thrust map.
    *
@@ -286,7 +286,7 @@ private:
   /**
    * @brief Latch the current pose as the hover reference, so that a switch to
    * HOVER holds where the vehicle is rather than wherever it was last told to
-   * go, and works coming from ACRO too, where the FC has no setpoint at all.
+   * go, and works coming from BODY_RATES too, where the FC has no setpoint at all.
    *
    * @return true if the pose could be read from TF.
    */
@@ -358,7 +358,7 @@ private:
    *
    * Fed in every control mode, not just POSITION: the FC EKF needs a couple of
    * seconds of continuous measurements to converge, so keeping it fed while
-   * flying ACRO is what makes a later switch to POSITION immediate.
+   * flying BODY_RATES is what makes a later switch to POSITION immediate.
    *
    * @param pose Pose already expressed in earth_frame_id_.
    */
@@ -399,7 +399,7 @@ private:
   double desired_frame_yaw_ = 0.0;
   Eigen::Matrix3d desired_frame_rotation_ = Eigen::Matrix3d::Identity();
 
-  // ACRO command mapping, from rate and thrust references to RC_OVERRIDE pulses
+  // BODY_RATES command mapping, from rate and thrust references to RC_OVERRIDE pulses
   double max_thrust_;
   double min_thrust_;
   double min_roll_rate_;
