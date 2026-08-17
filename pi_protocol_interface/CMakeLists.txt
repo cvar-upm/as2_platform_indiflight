@@ -19,7 +19,7 @@ if(NOT EXISTS ${PI_PROTOCOL_DIR}/config.yaml)
   fetchcontent_declare(
     pi_protocol_upstream
     GIT_REPOSITORY https://github.com/IMAV2026-MAVLab/pi-protocol.git
-    GIT_TAG hexa_as2
+    GIT_TAG hexa_as2_devel
     SOURCE_DIR ${PI_PROTOCOL_DIR}
   )
   fetchcontent_makeavailable(pi_protocol_upstream)
