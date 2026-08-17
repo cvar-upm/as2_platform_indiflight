@@ -257,7 +257,7 @@ private:
    *
    * @return true if the RC_OVERRIDE message was written to the FC.
    */
-  bool sendAcroCommand();
+  bool sendBodyRatesCommand();
 
   /**
    * @brief Whether the FC can run its onboard position controller, which both
@@ -439,7 +439,6 @@ private:
   // operands carry different clock types. The optional distinguishes "nothing
   // sent yet" from a source that legitimately stamps 0.
   std::optional<int64_t> last_external_pose_stamp_ns_;
-  std::shared_ptr<as2::tf::TfHandler> tf_handler_;
   // Exactly one of these is created, per the source parameters above.
   rclcpp::TimerBase::SharedPtr external_pose_timer_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr external_pose_sub_;

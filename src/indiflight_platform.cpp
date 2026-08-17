@@ -114,10 +114,6 @@ IndiflightPlatform::IndiflightPlatform(const rclcpp::NodeOptions & options)
     this->get_logger(), "pi-protocol connected on %s @ %d baud",
     pi_protocol_device_.c_str(), pi_protocol_baudrate_);
 
-  // Also used by the POSITION command path, which runs whether or not the
-  // external pose uplink is enabled.
-  tf_handler_ = std::make_shared<as2::tf::TfHandler>(this);
-
   // Feed for the FC's onboard EKF. Created after the pi-protocol connection:
   // sendExternalPose() is a no-op until the first downlink message provides an
   // FC tick anyway.
@@ -329,10 +325,12 @@ bool IndiflightPlatform::ownSetOffboardControl(bool offboard)
 
 bool IndiflightPlatform::ownSetPlatformControlMode(const as2_msgs::msg::ControlMode & msg)
 {
-  // as2::AerialPlatform forwards the raw request without checking it against
-  // control_modes.yaml, so this switch is the real capability gate. UNSET is
-  // absent on purpose: it is the mode the platform starts in, not one that can
-  // be requested.
+  // The FC position controller tracks setpoints in the global ENU frame
+  setCommandPoseFrameId(earth_frame_id_);
+  setCommandTwistFrameId(earth_frame_id_);
+
+  // UNSET is absent on purpose: it is the mode the platform starts in, not one
+  // that can be requested.
   switch (msg.control_mode) {
     case as2_msgs::msg::ControlMode::HOVER:
       if (!acceptHover()) {
@@ -366,7 +364,7 @@ bool IndiflightPlatform::ownSendCommand()
     case as2_msgs::msg::ControlMode::HOVER:
       return sendHoverCommand();
     case as2_msgs::msg::ControlMode::BODY_RATES:
-      return sendAcroCommand();
+      return sendBodyRatesCommand();
     case as2_msgs::msg::ControlMode::UNSET:
       RCLCPP_WARN_THROTTLE(
         this->get_logger(), *this->get_clock(), 1000,
@@ -466,7 +464,8 @@ bool IndiflightPlatform::sendHoverCommand()
 
 bool IndiflightPlatform::sendPositionCommand()
 {
-  geometry_msgs::msg::PoseStamped pose = command_pose_msg_;
+  // as2::AerialPlatform already delivered the command in the declared frame
+  const geometry_msgs::msg::PoseStamped & pose = command_pose_msg_;
   // An empty frame_id means no pose reference has arrived yet: a
   // default-constructed pose would command the origin with a zero quaternion
   // (NaN yaw). Refuse it.
@@ -474,13 +473,6 @@ bool IndiflightPlatform::sendPositionCommand()
     RCLCPP_WARN_THROTTLE(
       this->get_logger(), *this->get_clock(), 1000,
       "POSITION mode active but no pose reference received yet - not sent");
-    return false;
-  }
-  if (!toEarthFrame(pose)) {
-    RCLCPP_ERROR_THROTTLE(
-      this->get_logger(), *this->get_clock(), 1000,
-      "POSITION command in frame '%s', could not convert to '%s' - not sent",
-      pose.header.frame_id.c_str(), earth_frame_id_.c_str());
     return false;
   }
 
@@ -508,7 +500,7 @@ bool IndiflightPlatform::sendPoseSetpoint(const geometry_msgs::msg::PoseStamped 
   return true;
 }
 
-bool IndiflightPlatform::sendAcroCommand()
+bool IndiflightPlatform::sendBodyRatesCommand()
 {
   double thrust = this->command_thrust_msg_.thrust;
   double roll = this->command_twist_msg_.twist.angular.x;
