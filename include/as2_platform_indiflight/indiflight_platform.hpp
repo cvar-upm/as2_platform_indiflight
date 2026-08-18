@@ -181,6 +181,22 @@ private:
   void onPiProtocolEkfInputs(const pi_EKF_INPUTS_t & msg);
 
   /**
+   * @brief Ask the FC to echo a TIMESYNC exchange back, and time it.
+   */
+  void requestTimesync();
+
+  /**
+   * @brief Feed a TIMESYNC reply to the clock estimate.
+   *
+   * What this buys over the stream the estimate already sees is a measurement
+   * of the offset that does not carry the link's floor latency inside it, on a
+   * link whose latency nobody has characterised.
+   *
+   * @param msg Received TIMESYNC reply.
+   */
+  void onPiTimesync(const pi_TIMESYNC_t & msg);
+
+  /**
    * @brief Publish the 16 receiver channels, in wire order, on debug/rc.
    *
    * @param msg Received RC message.
@@ -518,6 +534,10 @@ private:
   // message table or baudrate mismatch; no bytes at all means the FC is not
   // sending, and neither is visible from the topics alone.
   rclcpp::TimerBase::SharedPtr link_check_timer_;
+
+  // Round-trip clock exchange with the FC.
+  rclcpp::TimerBase::SharedPtr timesync_timer_;
+  bool timesync_locked_ = false;
 
   // Debug publishers
   std::string debug_rc_command_topic_;

@@ -131,6 +131,7 @@ public:
   using RcCallback = std::function<void (const pi_RC_t &)>;
   using StatusCallback = std::function<void (const pi_PI_STATUS_t &)>;
   using BatteryCallback = std::function<void (const pi_BATTERY_t &)>;
+  using TimesyncCallback = std::function<void (const pi_TIMESYNC_t &)>;
 
   Client() = default;
   ~Client();
@@ -194,6 +195,28 @@ public:
    * @param callback Invoked with each parsed BATTERY message.
    */
   void setBatteryCallback(BatteryCallback callback) {battery_callback_ = std::move(callback);}
+
+  /**
+   * @brief Set the callback invoked for every TIMESYNC reply. Must be set
+   * before connect() to reliably receive the first messages.
+   *
+   * @param callback Invoked with each parsed TIMESYNC reply, which carries both
+   *        ends of the exchange: the host instant it was sent with, echoed
+   *        verbatim, and the FC stamp taken when it was answered.
+   */
+  void setTimesyncCallback(TimesyncCallback callback) {timesync_callback_ = std::move(callback);}
+
+  /**
+   * @brief Send a TIMESYNC request, for the FC to echo back with its own stamp.
+   *
+   * The send instant travels inside the message, so pairing a reply with its
+   * request costs no state here: whatever comes back carries the two numbers a
+   * round-trip offset needs.
+   *
+   * @param host_now_ns Host clock at the call, echoed verbatim by the FC.
+   * @return true if the message was written to the FC.
+   */
+  bool sendTimesyncRequest(int64_t host_now_ns);
 
   /**
    * @brief Send an RC_OVERRIDE message: the channels this node substitutes for
@@ -287,7 +310,12 @@ private:
   RcCallback rc_callback_;
   StatusCallback status_callback_;
   BatteryCallback battery_callback_;
+  TimesyncCallback timesync_callback_;
   pi_parse_states_t parse_state_{};
+
+  // Executor-thread-only: the requests go out from the same thread as every
+  // other uplink message.
+  uint32_t timesync_seq_ = 0;
 
   // Reader-thread-only gate; its accepted tick is mirrored into the atomics
   // below for the TX methods, which run on the ROS executor thread.

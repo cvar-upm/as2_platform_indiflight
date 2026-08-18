@@ -85,6 +85,59 @@ TEST(ClockSync, RejectsLatencySpike)
   EXPECT_LT(spike_synced_ns, spike_host_now_ns - 40'000'000);
 }
 
+TEST(ClockSync, RoundTripRemovesTheLatencyFloor)
+{
+  ClockSync sync;
+  // Every passive sample arrives 5ms after the FC stamped it, so the passive
+  // estimate can only ever place the FC clock 5ms late: the floor is a bias,
+  // not noise, and no number of samples removes it.
+  const int64_t true_offset_ns = 0;
+  const int64_t one_way_ns = 5'000'000;
+  const uint32_t step_us = 1000;
+  uint32_t fc_time_us = 1000;
+
+  for (int i = 0; i < 50; i++) {
+    sync.sync(fc_time_us, static_cast<int64_t>(fc_time_us) * 1000 + true_offset_ns + one_way_ns);
+    fc_time_us += step_us;
+  }
+  const int64_t passive_error_ns =
+    sync.toHostTime(fc_time_us).value() - (static_cast<int64_t>(fc_time_us) * 1000);
+  EXPECT_NEAR(passive_error_ns, one_way_ns, 1000);
+
+  // One symmetric exchange: the FC answers in the middle of a round trip of
+  // twice the one-way latency, which is exactly what the midpoint recovers.
+  const int64_t send_ns = static_cast<int64_t>(fc_time_us) * 1000 + true_offset_ns - one_way_ns;
+  const int64_t recv_ns = send_ns + 2 * one_way_ns;
+  const auto rtt_ns = sync.syncRoundTrip(fc_time_us, send_ns, recv_ns);
+  ASSERT_TRUE(rtt_ns.has_value());
+  EXPECT_EQ(*rtt_ns, 2 * one_way_ns);
+
+  const int64_t corrected_error_ns =
+    sync.toHostTime(fc_time_us).value() - (static_cast<int64_t>(fc_time_us) * 1000);
+  EXPECT_NEAR(corrected_error_ns, true_offset_ns, 1000);
+}
+
+TEST(ClockSync, RejectsRoundTripTooSlowToPlace)
+{
+  ClockSync sync;
+  const uint32_t step_us = 1000;
+  uint32_t fc_time_us = 1000;
+
+  // A link that answers in 1ms, measured a few times over.
+  for (int i = 0; i < 4; i++) {
+    const int64_t send_ns = static_cast<int64_t>(fc_time_us) * 1000 - 500'000;
+    ASSERT_TRUE(sync.syncRoundTrip(fc_time_us, send_ns, send_ns + 1'000'000).has_value());
+    fc_time_us += step_us;
+  }
+  const int64_t before_ns = sync.toHostTime(fc_time_us).value();
+
+  // A reply that took 100x longer was delayed by an unknown share on each leg,
+  // so its midpoint says nothing about where the FC stamp sat.
+  const int64_t send_ns = static_cast<int64_t>(fc_time_us) * 1000 - 500'000;
+  EXPECT_FALSE(sync.syncRoundTrip(fc_time_us, send_ns, send_ns + 100'000'000).has_value());
+  EXPECT_EQ(sync.toHostTime(fc_time_us).value(), before_ns);
+}
+
 TEST(ClockSync, HandlesTimeUsWraparound)
 {
   ClockSync sync;

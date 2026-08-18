@@ -111,6 +111,8 @@ IndiflightPlatform::IndiflightPlatform(const rclcpp::NodeOptions & options)
     [this](const pi_PI_STATUS_t & msg) {onPiStatus(msg);});
   pi_protocol_client_.setBatteryCallback(
     [this](const pi_BATTERY_t & msg) {onPiBattery(msg);});
+  pi_protocol_client_.setTimesyncCallback(
+    [this](const pi_TIMESYNC_t & msg) {onPiTimesync(msg);});
 
   // The only link to the FC: without it the platform has neither commands nor
   // state, so a failure here is fatal rather than degraded.
@@ -157,6 +159,14 @@ IndiflightPlatform::IndiflightPlatform(const rclcpp::NodeOptions & options)
   // One second never trips on a healthy link: EKF_INPUTS alone arrives at 500Hz.
   link_check_timer_ = this->create_wall_timer(
     std::chrono::seconds(1), std::bind(&IndiflightPlatform::checkLink, this));
+
+  // One exchange a second holds the offset without the link's floor latency in
+  // it, for 16 bytes against a downlink already carrying hundreds per second.
+  // The first one goes out here so the offset does not wait on the timer: the
+  // EXTERNAL_POSE uplink is refused until an offset exists.
+  timesync_timer_ = this->create_wall_timer(
+    std::chrono::seconds(1), std::bind(&IndiflightPlatform::requestTimesync, this));
+  requestTimesync();
 
   // Clear layout dimensions if they were set in a previous publication
   debug_rc_command_.layout.dim.clear();
@@ -1045,6 +1055,38 @@ void IndiflightPlatform::onPiStatus(const pi_PI_STATUS_t & msg)
     static_cast<uint16_t>(fc_pos_ctl_active_)};
   debug_msg.stamp = fcStamp(msg.time_us);
   debug_pi_status_pub_->publish(debug_msg);
+}
+
+void IndiflightPlatform::requestTimesync()
+{
+  pi_protocol_client_.sendTimesyncRequest(this->get_clock()->now().nanoseconds());
+}
+
+void IndiflightPlatform::onPiTimesync(const pi_TIMESYNC_t & msg)
+{
+  // Read first: everything done before it counts as round trip the FC never
+  // spent, and lands in the offset as error.
+  const int64_t host_recv_ns = this->get_clock()->now().nanoseconds();
+  const auto rtt_ns = pi_protocol_clock_sync_.syncRoundTrip(
+    msg.fc_time_us, static_cast<int64_t>(msg.host_ns), host_recv_ns);
+  if (!rtt_ns) {
+    RCLCPP_DEBUG_THROTTLE(
+      this->get_logger(), *this->get_clock(), 10000,
+      "TIMESYNC seq %u discarded: round trip too slow to place the FC stamp", msg.seq);
+    return;
+  }
+  // The first exchange is a state change worth seeing: it is what releases the
+  // EXTERNAL_POSE uplink, and its round trip is the only measure of the link's
+  // latency anything reports. The rest are routine.
+  if (!timesync_locked_) {
+    timesync_locked_ = true;
+    RCLCPP_INFO(
+      this->get_logger(), "FC clock locked over TIMESYNC, round trip %.3f ms", *rtt_ns / 1e6);
+    return;
+  }
+  RCLCPP_DEBUG_THROTTLE(
+    this->get_logger(), *this->get_clock(), 10000,
+    "TIMESYNC seq %u round trip %.3f ms", msg.seq, *rtt_ns / 1e6);
 }
 
 void IndiflightPlatform::checkLink()

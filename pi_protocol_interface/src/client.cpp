@@ -237,6 +237,20 @@ void Client::readLoop()
         case PI_MSG_BATTERY_ID:
           deliver(piMsgBatteryRx, battery_callback_);
           break;
+        case PI_MSG_TIMESYNC_ID:
+          // Not deliver(): every other message starts with its time_us, this
+          // one starts with the sequence number and carries the FC stamp last.
+          if (piMsgTimesyncRx != nullptr) {
+            if (gate(piMsgTimesyncRx->fc_time_us)) {
+              frames_parsed_.fetch_add(1, std::memory_order_relaxed);
+              if (timesync_callback_) {
+                timesync_callback_(*piMsgTimesyncRx);
+              }
+            } else {
+              frames_gated_.fetch_add(1, std::memory_order_relaxed);
+            }
+          }
+          break;
         default:
           break;
       }
@@ -256,6 +270,16 @@ bool Client::sendMsg(void * msg_raw)
 
   const ssize_t written = ::write(fd_, buf, num_bytes);
   return written == static_cast<ssize_t>(num_bytes);
+}
+
+bool Client::sendTimesyncRequest(int64_t host_now_ns)
+{
+  piMsgTimesyncTx.seq = ++timesync_seq_;
+  piMsgTimesyncTx.host_ns = static_cast<uint64_t>(host_now_ns);
+  // Zero is what marks this as a request; the FC overwrites it with its own
+  // micros() when it answers.
+  piMsgTimesyncTx.fc_time_us = 0;
+  return sendMsg(&piMsgTimesyncTx);
 }
 
 bool Client::sendRcOverride(uint16_t roll, uint16_t pitch, uint16_t yaw, uint16_t throttle)
