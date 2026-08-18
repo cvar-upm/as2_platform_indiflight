@@ -159,37 +159,6 @@ public:
 
 private:
   /**
-   * @brief Read a parameter into param_value, declaring it first if the node
-   * has not declared it yet, and log the value that ended up in use.
-   *
-   * @param param_name Name of the parameter.
-   * @param param_value Destination, and the default when use_default is true.
-   * @param use_default Declare with param_value as default, making the
-   *        parameter optional. When false the parameter is required and the
-   *        node throws if it was not passed.
-   */
-  template<typename T>
-  void getParam(const std::string & param_name, T & param_value, bool use_default = false)
-  {
-    if (!this->has_parameter(param_name)) {
-      if (use_default) {
-        this->declare_parameter<T>(param_name, param_value);
-      } else {
-        try {
-          this->declare_parameter<T>(param_name);
-        } catch (const rclcpp::exceptions::InvalidParameterValueException & e) {
-          RCLCPP_FATAL(
-            this->get_logger(), "Required parameter <%s> was not passed to the node",
-            param_name.c_str());
-          throw;
-        }
-      }
-    }
-    this->get_parameter(param_name, param_value);
-    RCLCPP_INFO_STREAM(this->get_logger(), param_name << ": " << param_value);
-  }
-
-  /**
    * @brief Compute the rate-to-pulse slopes from the configured rate limits.
    */
   void computeControlSlopes();
