@@ -4,14 +4,14 @@
 
 **Both control modes are supported by the same node and the same configuration.** Nothing
 is switched at build time or by picking a different `control_modes.yaml`: the platform
-advertises `ACRO`, `POSITION`, `HOVER` and `UNSET`, and executes whichever the motion
+advertises `BODY_RATES`, `POSITION`, `HOVER` and `UNSET`, and executes whichever the motion
 controller negotiates. Likewise every pi-protocol message is handled, and each FC simply
 triggers the subset it actually sends. Which control mode is negotiated and which messages
 an FC streams are independent axes:
 
 | Control mode | Uplink |
 |---|---|
-| `ACRO` | `RC_OVERRIDE` rate/thrust pulses (loop closed host-side) |
+| `BODY_RATES` | `RC_OVERRIDE` rate/thrust pulses (loop closed host-side) |
 | `POSITION` | `POS_SETPOINT` (loop closed on the FC, needs `USE_LOCAL_POSITION`) |
 | `HOVER` | nothing; the FC holds its last setpoint |
 
@@ -21,7 +21,7 @@ an FC streams are independent axes:
 | `PI_STATUS` | FC→host | platform armed/offboard |
 | `BATTERY` | FC→host | `sensor_measurements/battery` |
 | `AUX` | FC→host | `debug/aux` (raw switch values) |
-| `RC_OVERRIDE` | host→FC | the `ACRO` command |
+| `RC_OVERRIDE` | host→FC | the `BODY_RATES` command |
 | `POS_SETPOINT` | host→FC | the `POSITION` command |
 | `EXTERNAL_POSE` | host→FC | measurement for the FC's onboard EKF |
 
@@ -164,14 +164,14 @@ external_pose:
 ```
 
 and the AS2 motion controller must run with `use_bypass: true`, so `POSITION` references pass
-straight through to `actuator_command/pose` (the geometric controller only outputs `ACRO`).
+straight through to `actuator_command/pose` (the geometric controller only outputs `BODY_RATES`).
 `SPEED`/`TRAJECTORY` behaviors will not negotiate a mode against this platform; position-only
 missions are the supported envelope.
 
 **Feeding the FC EKF is independent of the control mode.** `external_pose.enable` starts a timer
-that runs whatever mode is active, including `ACRO`. That is deliberate: the FC EKF needs about
+that runs whatever mode is active, including `BODY_RATES`. That is deliberate: the FC EKF needs about
 2 s of continuous measurements to converge (`EKF_CONVERGE_TIME_US`) before `POSITION_MODE` can
-engage, so a vehicle flying in `ACRO` with the feed running can be handed over with a `set_mode`
+engage, so a vehicle flying in `BODY_RATES` with the feed running can be handed over with a `set_mode`
 and take it immediately, instead of waiting mid-air.
 
 **Data path** (all conversions in `include/as2_platform_indiflight/conversions.hpp`):
