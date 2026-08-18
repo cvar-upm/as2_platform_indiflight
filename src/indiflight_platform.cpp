@@ -166,11 +166,10 @@ void IndiflightPlatform::readParameters()
 {
   external_odom_ = getParameter<bool>("external_odom");
 
-  base_link_frame_id_ = as2::tf::generateTfName(this, "base_link");
-  odom_frame_id_ = as2::tf::generateTfName(this, "odom");
+  base_link_frame_id_ = this->getBaseFrameId();
+  odom_frame_id_ = this->getOdomFrameId();
   // Not namespaced, unlike the two above: the global reference is shared.
-  earth_frame_id_ = "earth";
-  earth_frame_id_ = getParameter("global_ref_frame", earth_frame_id_);
+  earth_frame_id_ = this->getEarthFrameId();
 
   pi_protocol_device_ = getParameter<std::string>("pi_protocol.device");
   pi_protocol_baudrate_ = getParameter<int>("pi_protocol.baudrate");
