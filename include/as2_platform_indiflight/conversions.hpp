@@ -59,6 +59,17 @@ namespace as2_platform_indiflight
 Eigen::Vector3d enuToNed(const Eigen::Vector3d & enu);
 
 /**
+ * @brief FLU body vector to FRD body vector, for body rates and specific forces.
+ *
+ * Not the same transform as enuToNed(): a body frame keeps its forward axis,
+ * so only the lateral and vertical axes flip.
+ *
+ * @param flu Vector in the FLU body frame.
+ * @return The same vector in FRD: x = flu.x, y = -flu.y, z = -flu.z.
+ */
+Eigen::Vector3d fluToFrd(const Eigen::Vector3d & flu);
+
+/**
  * @brief Attitude quaternion ENU<-FLU to NED<-FRD.
  *
  * @param q_enu_flu Quaternion such that v_enu = q * v_flu, the ROS convention
@@ -68,13 +79,13 @@ Eigen::Vector3d enuToNed(const Eigen::Vector3d & enu);
 Eigen::Quaterniond enuFluToNedFrd(const Eigen::Quaterniond & q_enu_flu);
 
 /**
- * @brief ENU yaw to NED yaw, in the units POS_SETPOINT carries on the wire.
+ * @brief ENU yaw to NED yaw.
  *
  * @param yaw_enu_rad Yaw in radians, 0 = East, positive counter-clockwise seen
  *        from above.
- * @return Yaw in degrees, 0 = North, positive clockwise, wrapped to [-180, 180).
+ * @return Yaw in radians, 0 = North, positive clockwise, wrapped to [-pi, pi).
  */
-double yawEnuRadToNedDeg(double yaw_enu_rad);
+double yawEnuRadToNedRad(double yaw_enu_rad);
 
 }  // namespace as2_platform_indiflight
 

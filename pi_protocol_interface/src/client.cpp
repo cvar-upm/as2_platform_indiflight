@@ -72,6 +72,7 @@ bool FcStampGate::accept(uint32_t time_us)
       // garbage. Adopt the new clock.
       last_us_ = time_us;
       pending_valid_ = false;
+      session_++;
       return true;
     }
   }
@@ -172,6 +173,15 @@ void Client::disconnect()
   }
 }
 
+LinkStats Client::stats() const
+{
+  return LinkStats{
+    bytes_read_.load(std::memory_order_relaxed),
+    frames_parsed_.load(std::memory_order_relaxed),
+    frames_gated_.load(std::memory_order_relaxed),
+    ext_pose_skipped_.load(std::memory_order_relaxed)};
+}
+
 void Client::readLoop()
 {
   // Runs the stamp gate and, on acceptance, mirrors the newest FC tick into
@@ -181,6 +191,7 @@ void Client::readLoop()
       if (!stamp_gate_.accept(time_us)) {
         return false;
       }
+      fc_session_.store(stamp_gate_.session(), std::memory_order_relaxed);
       last_fc_time_us_.store(stamp_gate_.last(), std::memory_order_relaxed);
       fc_time_valid_.store(true, std::memory_order_release);
       return true;
@@ -188,10 +199,15 @@ void Client::readLoop()
 
   // One dispatch shape per message: null-check the double-buffered Rx
   // pointer, run the stamp gate, then invoke the callback if one is set.
-  const auto deliver = [&gate](auto * rx_msg, const auto & callback) {
-      if (rx_msg == nullptr || !gate(rx_msg->time_us)) {
+  const auto deliver = [this, &gate](auto * rx_msg, const auto & callback) {
+      if (rx_msg == nullptr) {
         return;
       }
+      if (!gate(rx_msg->time_us)) {
+        frames_gated_.fetch_add(1, std::memory_order_relaxed);
+        return;
+      }
+      frames_parsed_.fetch_add(1, std::memory_order_relaxed);
       if (callback) {
         callback(*rx_msg);
       }
@@ -206,19 +222,34 @@ void Client::readLoop()
       }
       break;  // real error, e.g. device unplugged
     }
+    bytes_read_.fetch_add(static_cast<uint64_t>(n), std::memory_order_relaxed);
     for (ssize_t i = 0; i < n; i++) {
       switch (piParse(&parse_state_, buf[i])) {
         case PI_MSG_EKF_INPUTS_ID:
           deliver(piMsgEkfInputsRx, ekf_inputs_callback_);
           break;
-        case PI_MSG_AUX_ID:
-          deliver(piMsgAuxRx, aux_callback_);
+        case PI_MSG_RC_ID:
+          deliver(piMsgRcRx, rc_callback_);
           break;
         case PI_MSG_PI_STATUS_ID:
           deliver(piMsgPiStatusRx, status_callback_);
           break;
         case PI_MSG_BATTERY_ID:
           deliver(piMsgBatteryRx, battery_callback_);
+          break;
+        case PI_MSG_TIMESYNC_ID:
+          // Not deliver(): every other message starts with its time_us, this
+          // one starts with the sequence number and carries the FC stamp last.
+          if (piMsgTimesyncRx != nullptr) {
+            if (gate(piMsgTimesyncRx->fc_time_us)) {
+              frames_parsed_.fetch_add(1, std::memory_order_relaxed);
+              if (timesync_callback_) {
+                timesync_callback_(*piMsgTimesyncRx);
+              }
+            } else {
+              frames_gated_.fetch_add(1, std::memory_order_relaxed);
+            }
+          }
           break;
         default:
           break;
@@ -241,12 +272,18 @@ bool Client::sendMsg(void * msg_raw)
   return written == static_cast<ssize_t>(num_bytes);
 }
 
-bool Client::sendRcOverride(
-  uint16_t roll, uint16_t pitch, uint16_t yaw, uint16_t throttle)
+bool Client::sendTimesyncRequest(int64_t host_now_ns)
 {
-  if (!fc_time_valid_.load(std::memory_order_acquire)) {
-    return false;
-  }
+  piMsgTimesyncTx.seq = ++timesync_seq_;
+  piMsgTimesyncTx.host_ns = static_cast<uint64_t>(host_now_ns);
+  // Zero is what marks this as a request; the FC overwrites it with its own
+  // micros() when it answers.
+  piMsgTimesyncTx.fc_time_us = 0;
+  return sendMsg(&piMsgTimesyncTx);
+}
+
+bool Client::sendRcOverride(uint16_t roll, uint16_t pitch, uint16_t yaw, uint16_t throttle)
+{
   piMsgRcOverrideTx.time_us = last_fc_time_us_.load(std::memory_order_relaxed);
   piMsgRcOverrideTx.roll = roll;
   piMsgRcOverrideTx.pitch = pitch;
@@ -256,39 +293,54 @@ bool Client::sendRcOverride(
   return sendMsg(&piMsgRcOverrideTx);
 }
 
-bool Client::sendPosSetpoint(
-  float ned_x, float ned_y, float ned_z,
-  float ned_xd, float ned_yd, float ned_zd, float yaw_deg)
+bool Client::sendSetpoint(
+  float vec_a_x, float vec_a_y, float vec_a_z,
+  float vec_b_x, float vec_b_y, float vec_b_z,
+  float scalar_c, uint8_t mode)
 {
   if (!fc_time_valid_.load(std::memory_order_acquire)) {
     // No downlink message parsed yet - a host-clock stamp would be silently
     // discarded by the FC's time_us comparisons, so refuse instead.
     return false;
   }
-  piMsgPosSetpointTx.time_us = last_fc_time_us_.load(std::memory_order_relaxed);
-  piMsgPosSetpointTx.ned_x = ned_x;
-  piMsgPosSetpointTx.ned_y = ned_y;
-  piMsgPosSetpointTx.ned_z = ned_z;
-  piMsgPosSetpointTx.ned_xd = ned_xd;
-  piMsgPosSetpointTx.ned_yd = ned_yd;
-  piMsgPosSetpointTx.ned_zd = ned_zd;
-  piMsgPosSetpointTx.yaw = yaw_deg;
+  piMsgSetpointTx.time_us = last_fc_time_us_.load(std::memory_order_relaxed);
+  piMsgSetpointTx.vec_a_x = vec_a_x;
+  piMsgSetpointTx.vec_a_y = vec_a_y;
+  piMsgSetpointTx.vec_a_z = vec_a_z;
+  piMsgSetpointTx.vec_b_x = vec_b_x;
+  piMsgSetpointTx.vec_b_y = vec_b_y;
+  piMsgSetpointTx.vec_b_z = vec_b_z;
+  piMsgSetpointTx.scalar_c = scalar_c;
+  piMsgSetpointTx.mode = mode;
 
-  return sendMsg(&piMsgPosSetpointTx);
+  return sendMsg(&piMsgSetpointTx);
 }
 
 bool Client::sendExternalPose(
   uint32_t fc_time_us,
   float ned_x, float ned_y, float ned_z,
   float ned_xd, float ned_yd, float ned_zd,
-  float q_w, float q_x, float q_y, float q_z)
+  float q_w, float q_x, float q_y, float q_z, uint8_t mode)
 {
+  const uint32_t session = fc_session_.load(std::memory_order_relaxed);
+  if (session != ext_pose_session_) {
+    // The latched tick belongs to a clock domain that no longer exists.
+    ext_pose_session_ = session;
+    ext_pose_sent_ = false;
+  }
+
   if (ext_pose_sent_ && static_cast<int32_t>(fc_time_us - last_ext_pose_tick_) <= 0) {
     // setLocalPosMeas() requires strictly increasing time_us and would drop
     // this silently. Skipping is not an error: the offset estimate moves, so a
     // later pose can map just behind the previous one.
-    return true;
+    ext_pose_skipped_.fetch_add(1, std::memory_order_relaxed);
+    if (++ext_pose_skips_ < kMaxExtPoseSkips) {
+      return true;
+    }
+    // Latched ahead of the FC for a whole window, so the reference is unusable.
+    ext_pose_sent_ = false;
   }
+  ext_pose_skips_ = 0;
 
   piMsgExternalPoseTx.time_us = fc_time_us;
   piMsgExternalPoseTx.ned_x = ned_x;
@@ -301,6 +353,7 @@ bool Client::sendExternalPose(
   piMsgExternalPoseTx.body_qx = q_x;
   piMsgExternalPoseTx.body_qy = q_y;
   piMsgExternalPoseTx.body_qz = q_z;
+  piMsgExternalPoseTx.mode = mode;
 
   if (!sendMsg(&piMsgExternalPoseTx)) {
     return false;

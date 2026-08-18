@@ -77,18 +77,21 @@
 
 #define PULSE_RANGE 1000
 
+// SETPOINT mode field, see indiflight_pkg/pi-protocol/msgs/SETPOINT.yaml
+#define SETPOINT_POSITION   0
+#define SETPOINT_VELOCITY   1
+#define SETPOINT_TRAJECTORY 2
+#define SETPOINT_ATTITUDE   3
+#define SETPOINT_ACRO       4
+#define SETPOINT_YAW_RATE   (1 << 3)
+
 namespace as2_platform_indiflight
 {
 
-/**
- * @brief Enumeration of RC channel indices
- *
- * Defines the mapping between logical control inputs and the 4 channels
- * carried by pi-protocol's RC_OVERRIDE message. ARM/OFFBOARD/killswitch are
- * no longer sent by this node at all - they live permanently on the physical
- * radio underneath indiflight's PI OVERRIDE box mode, which only ever
- * overrides these 4 stick channels.
- */
+// Wire positions of the sticks in RC_OVERRIDE, for the default AETR receiver
+// mapping. A receiver wired differently needs these changed to match. The
+// message carries these four and nothing else: what the pilot's sticks would
+// do, in the mode the pilot has selected.
 enum RC_CHANNELS
 {
   ROLL = 0,
@@ -96,6 +99,13 @@ enum RC_CHANNELS
   THROTTLE = 2,
   YAW = 3
 };
+
+
+// EXTERNAL_POSE mode field, see indiflight_pkg/pi-protocol/msgs/EXTERNAL_POSE.yaml
+#define EXT_POSE_USE_POS   (1 << 0)
+#define EXT_POSE_USE_QUAT  (1 << 1)
+#define EXT_POSE_USE_VEL   (1 << 2)
+#define EXT_POSE_TRUST     (1 << 3)
 
 class IndiflightPlatform : public as2::AerialPlatform
 {
@@ -171,11 +181,27 @@ private:
   void onPiProtocolEkfInputs(const pi_EKF_INPUTS_t & msg);
 
   /**
-   * @brief Publish the 14 raw AUX channel values on debug/aux.
-   *
-   * @param msg Received AUX message.
+   * @brief Ask the FC to echo a TIMESYNC exchange back, and time it.
    */
-  void onPiAux(const pi_AUX_t & msg);
+  void requestTimesync();
+
+  /**
+   * @brief Feed a TIMESYNC reply to the clock estimate.
+   *
+   * What this buys over the stream the estimate already sees is a measurement
+   * of the offset that does not carry the link's floor latency inside it, on a
+   * link whose latency nobody has characterised.
+   *
+   * @param msg Received TIMESYNC reply.
+   */
+  void onPiTimesync(const pi_TIMESYNC_t & msg);
+
+  /**
+   * @brief Publish the 16 receiver channels, in wire order, on debug/rc.
+   *
+   * @param msg Received RC message.
+   */
+  void onPiRc(const pi_RC_t & msg);
 
   /**
    * @brief Update the platform arm/offboard state from a PI_STATUS message and
@@ -248,6 +274,29 @@ private:
   bool sendAcroCommand();
 
   /**
+   * @brief The commanded thrust as a specific force in the FC's FRD body frame.
+   *
+   * @return Specific force in m/s^2, with upwards thrust along negative z.
+   */
+  Eigen::Vector3d specificForceFrd() const;
+
+  /**
+   * @brief Send the ACRO references as a SETPOINT in SI units, which reach the
+   * INDI without the pilot's rate curve or throttle scaling.
+   *
+   * @return true if the SETPOINT message was written to the FC.
+   */
+  bool sendAcroSetpoint();
+
+  /**
+   * @brief Send command_pose_msg_ orientation and command_thrust_msg_ as an
+   * attitude SETPOINT. Needs no state estimate on the FC.
+   *
+   * @return true if the SETPOINT message was written to the FC.
+   */
+  bool sendAttitudeCommand();
+
+  /**
    * @brief Whether the FC can run its onboard position controller, which both
    * POSITION and HOVER are executed with.
    *
@@ -264,6 +313,12 @@ private:
    *         being left leaves the FC holding a position setpoint.
    */
   bool acceptHover();
+
+  /**
+   * @brief Report the state of the FC link while no message has been decoded,
+   * so a silent FC is distinguishable from a stream that does not parse.
+   */
+  void checkLink();
 
   /**
    * @brief Latch the current pose as the hover reference, so that a switch to
@@ -289,7 +344,33 @@ private:
    * @param pose Pose to command.
    * @return true if the setpoint was written to the FC.
    */
-  bool sendPoseSetpoint(const geometry_msgs::msg::PoseStamped & pose);
+  bool sendPoseSetpoint(
+    const geometry_msgs::msg::PoseStamped & pose,
+    const Eigen::Vector3d & vel_ned = Eigen::Vector3d::Zero(), uint8_t mode = 0);
+
+  /**
+   * @brief Set the yaw-rate bit and its value when the active mode commands yaw
+   * as an angular velocity rather than an angle.
+   *
+   * @param mode Mode byte, updated in place.
+   * @return Yaw rate in the FC's NED degrees per second.
+   */
+  float yawRateForMode(uint8_t & mode);
+
+  /**
+   * @brief Send command_twist_msg_ as a NED velocity setpoint.
+   *
+   * @return true if the setpoint reached the FC.
+   */
+  bool sendSpeedCommand();
+
+  /**
+   * @brief Send the first trajectory setpoint as a position with the commanded
+   * velocity as feedforward.
+   *
+   * @return true if the setpoint reached the FC.
+   */
+  bool sendTrajectoryCommand();
 
   /**
    * @brief Send command_pose_msg_ as a NED POS_SETPOINT for the FC's onboard
@@ -381,6 +462,10 @@ private:
   double desired_frame_yaw_ = 0.0;
   Eigen::Matrix3d desired_frame_rotation_ = Eigen::Matrix3d::Identity();
 
+  // Airframe mass, kg. Turns the commanded thrust into the specific force that
+  // SETPOINT carries, since neither the message nor the FC knows the mass
+  double mass_;
+
   // ACRO command mapping, from rate and thrust references to RC_OVERRIDE pulses
   double max_thrust_;
   double min_thrust_;
@@ -421,6 +506,11 @@ private:
   // operands carry different clock types. The optional distinguishes "nothing
   // sent yet" from a source that legitimately stamps 0.
   std::optional<int64_t> last_external_pose_stamp_ns_;
+  // Client-side skip count already reported, so the warning only fires while it grows.
+  uint64_t ext_pose_skipped_seen_ = 0;
+  // FC state from PI_STATUS, which the control modes are gated on.
+  bool fc_ekf_converged_ = false;
+  bool fc_pos_ctl_active_ = false;
   std::shared_ptr<as2::tf::TfHandler> tf_handler_;
   // Exactly one of these is created, per the source parameters above.
   rclcpp::TimerBase::SharedPtr external_pose_timer_;
@@ -440,11 +530,20 @@ private:
   // battery_sensor_ptr_ do).
   std::unique_ptr<as2::sensors::Sensor<sensor_msgs::msg::JointState>> motor_sensor_ptr_;
 
+  // Watchdog over the FC link. Bytes arriving without frames decoding means a
+  // message table or baudrate mismatch; no bytes at all means the FC is not
+  // sending, and neither is visible from the topics alone.
+  rclcpp::TimerBase::SharedPtr link_check_timer_;
+
+  // Round-trip clock exchange with the FC.
+  rclcpp::TimerBase::SharedPtr timesync_timer_;
+  bool timesync_locked_ = false;
+
   // Debug publishers
   std::string debug_rc_command_topic_;
   std::string debug_og_timestamp_topic_;
   std::string debug_pi_status_topic_;
-  std::string debug_aux_topic_;
+  std::string debug_rc_topic_;
   rclcpp::Publisher<as2_msgs::msg::UInt16MultiArrayStamped>::SharedPtr debug_rc_command_pub_;
   as2_msgs::msg::UInt16MultiArrayStamped debug_rc_command_;
   // Raw FC time_us behind the imu_sensor_ptr_/motor_sensor_ptr_ publications:
@@ -452,8 +551,8 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::TimeReference>::SharedPtr og_timestamp_pub_;
   // [armed, pi_override_active, rx_link_valid] as 0/1, decoded from PI_STATUS.flags.
   rclcpp::Publisher<as2_msgs::msg::UInt16MultiArrayStamped>::SharedPtr debug_pi_status_pub_;
-  // The 14 raw AUX channel values, to check switch bands against the radio.
-  rclcpp::Publisher<as2_msgs::msg::UInt16MultiArrayStamped>::SharedPtr debug_aux_pub_;
+  // The 16 receiver channels, to check stick and switch positions against the radio.
+  rclcpp::Publisher<as2_msgs::msg::UInt16MultiArrayStamped>::SharedPtr debug_rc_pub_;
 };
 
 }  // namespace as2_platform_indiflight

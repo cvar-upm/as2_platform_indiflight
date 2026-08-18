@@ -38,6 +38,7 @@
 #ifndef PI_PROTOCOL__CLIENT_HPP_
 #define PI_PROTOCOL__CLIENT_HPP_
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -91,6 +92,13 @@ public:
    */
   bool valid() const {return valid_;}
 
+  /**
+   * @brief Identifies the FC clock domain the accepted stamps belong to.
+   *
+   * @return Number of FC clock restarts adopted since construction.
+   */
+  uint32_t session() const {return session_;}
+
 private:
   static constexpr int32_t kMinDeltaUs = -1000000;  // 1 s backwards slack
   static constexpr int32_t kMaxDeltaUs = 5000000;   // 5 s forward gap
@@ -99,19 +107,31 @@ private:
   uint32_t last_us_ = 0;
   bool pending_valid_ = false;
   uint32_t pending_us_ = 0;
+  uint32_t session_ = 0;
 };
 
 /**
  * @brief Host-side client for indiflight's pi-protocol telemetry channel.
  *
  */
+/// Link counters, for telling "nothing arrives" from "arrives and does not
+/// parse" without a logic analyser. Monotonic since connect().
+struct LinkStats
+{
+  uint64_t bytes_read;        ///< Bytes off the serial port.
+  uint64_t frames_parsed;     ///< Frames that passed framing and CRC.
+  uint64_t frames_gated;      ///< Parsed but dropped by the FC stamp gate.
+  uint64_t ext_pose_skipped;  ///< EXTERNAL_POSE dropped for not advancing the FC tick.
+};
+
 class Client
 {
 public:
   using EkfInputsCallback = std::function<void (const pi_EKF_INPUTS_t &)>;
-  using AuxCallback = std::function<void (const pi_AUX_t &)>;
+  using RcCallback = std::function<void (const pi_RC_t &)>;
   using StatusCallback = std::function<void (const pi_PI_STATUS_t &)>;
   using BatteryCallback = std::function<void (const pi_BATTERY_t &)>;
+  using TimesyncCallback = std::function<void (const pi_TIMESYNC_t &)>;
 
   Client() = default;
   ~Client();
@@ -148,19 +168,19 @@ public:
   }
 
   /**
-   * @brief Set the callback invoked for every successfully parsed AUX message
-   * (raw rcData of the 14 aux channels, 1000-2000 us): the arm/mode switch
-   * readback on builds that do not send PI_STATUS. Must be set before
-   * connect() to reliably receive the first messages.
+   * @brief Set the callback invoked for every successfully parsed RC message:
+   * the 16 receiver channels in wire order, as the FC reads them from the
+   * driver. Must be set before connect() to reliably receive the first
+   * messages.
    *
-   * @param callback Invoked with each parsed AUX message.
+   * @param callback Invoked with each parsed RC message.
    */
-  void setAuxCallback(AuxCallback callback) {aux_callback_ = std::move(callback);}
+  void setRcCallback(RcCallback callback) {rc_callback_ = std::move(callback);}
 
   /**
    * @brief Set the callback invoked for every successfully parsed PI_STATUS
-   * message (armed / PI OVERRIDE active / rx link valid). Not emitted by
-   * builds that report switch state via AUX. Must be set before connect() to
+   * message: armed, which control family the pilot has selected, radio link
+   * validity and estimator convergence. Must be set before connect() to
    * reliably receive the first messages.
    *
    * @param callback Invoked with each parsed PI_STATUS message.
@@ -177,22 +197,36 @@ public:
   void setBatteryCallback(BatteryCallback callback) {battery_callback_ = std::move(callback);}
 
   /**
-   * @brief Send an RC_OVERRIDE message - the roll/pitch/yaw/throttle stick
-   * override for indiflight's PI OVERRIDE box mode. Values follow
-   * Betaflight's usual 1000-2000 pulse convention. Only takes effect on the
-   * FC while PI OVERRIDE is active and the corresponding channel is enabled
-   * in pi_override_channels_mask.
+   * @brief Set the callback invoked for every TIMESYNC reply. Must be set
+   * before connect() to reliably receive the first messages.
    *
-   * Stamped with the last FC tick seen on the downlink, as POS_SETPOINT is: a
-   * stick command has no sampling instant of its own.
+   * @param callback Invoked with each parsed TIMESYNC reply, which carries both
+   *        ends of the exchange: the host instant it was sent with, echoed
+   *        verbatim, and the FC stamp taken when it was answered.
+   */
+  void setTimesyncCallback(TimesyncCallback callback) {timesync_callback_ = std::move(callback);}
+
+  /**
+   * @brief Send a TIMESYNC request, for the FC to echo back with its own stamp.
    *
-   * @param roll Roll stick pulse [us].
-   * @param pitch Pitch stick pulse [us].
-   * @param yaw Yaw stick pulse [us].
-   * @param throttle Throttle stick pulse [us].
-   * @return true on a successful write. false until the first downlink message
-   *         has been parsed, since there is no FC tick to stamp with yet, or if
-   *         the write fails.
+   * The send instant travels inside the message, so pairing a reply with its
+   * request costs no state here: whatever comes back carries the two numbers a
+   * round-trip offset needs.
+   *
+   * @param host_now_ns Host clock at the call, echoed verbatim by the FC.
+   * @return true if the message was written to the FC.
+   */
+  bool sendTimesyncRequest(int64_t host_now_ns);
+
+  /**
+   * @brief Send an RC_OVERRIDE message: the channels this node substitutes for
+   * the pilot's, in wire order and in Betaflight's 1000-2000 pulse convention.
+   * Only the channels enabled in pi_override_channels_mask are taken, and only
+   * while PI OVERRIDE is active. The firmware refuses the arming and PI
+   * OVERRIDE channels whatever is sent here.
+   *
+   * @param channels Pulse per wire channel.
+   * @return true if the message was written to the FC.
    */
   bool sendRcOverride(uint16_t roll, uint16_t pitch, uint16_t yaw, uint16_t throttle);
 
@@ -220,9 +254,17 @@ public:
    * @return true on a successful write. false until the first downlink message
    *         has been parsed, since there is no FC tick to stamp with yet.
    */
-  bool sendPosSetpoint(
-    float ned_x, float ned_y, float ned_z,
-    float ned_xd, float ned_yd, float ned_zd, float yaw_deg);
+  /**
+   * @brief Link counters since connect().
+   *
+   * @return Bytes read, frames parsed and frames dropped by the stamp gate.
+   */
+  LinkStats stats() const;
+
+  bool sendSetpoint(
+    float vec_a_x, float vec_a_y, float vec_a_z,
+    float vec_b_x, float vec_b_y, float vec_b_z,
+    float scalar_c, uint8_t mode);
 
   /**
    * @brief Send an EXTERNAL_POSE message: position/attitude measurement for
@@ -255,7 +297,7 @@ public:
     uint32_t fc_time_us,
     float ned_x, float ned_y, float ned_z,
     float ned_xd, float ned_yd, float ned_zd,
-    float q_w, float q_x, float q_y, float q_z);
+    float q_w, float q_x, float q_y, float q_z, uint8_t mode = 0);
 
 private:
   void readLoop();
@@ -265,21 +307,37 @@ private:
   std::thread read_thread_;
   std::atomic<bool> running_{false};
   EkfInputsCallback ekf_inputs_callback_;
-  AuxCallback aux_callback_;
+  RcCallback rc_callback_;
   StatusCallback status_callback_;
   BatteryCallback battery_callback_;
+  TimesyncCallback timesync_callback_;
   pi_parse_states_t parse_state_{};
+
+  // Executor-thread-only: the requests go out from the same thread as every
+  // other uplink message.
+  uint32_t timesync_seq_ = 0;
 
   // Reader-thread-only gate; its accepted tick is mirrored into the atomics
   // below for the TX methods, which run on the ROS executor thread.
   FcStampGate stamp_gate_;
+  std::atomic<uint64_t> bytes_read_{0};
+  std::atomic<uint64_t> frames_parsed_{0};
+  std::atomic<uint64_t> frames_gated_{0};
   std::atomic<uint32_t> last_fc_time_us_{0};
   std::atomic<bool> fc_time_valid_{false};
+  std::atomic<uint32_t> fc_session_{0};
+  std::atomic<uint64_t> ext_pose_skipped_{0};
+
+  // Consecutive skips tolerated before the latched tick is dropped, ~0.5 s of a
+  // 100 Hz pose stream.
+  static constexpr uint32_t kMaxExtPoseSkips = 50;
 
   // sendExternalPose() bookkeeping for the FC's strictly-increasing time_us
   // requirement. Only touched from the (single) ROS executor thread.
   bool ext_pose_sent_ = false;
   uint32_t last_ext_pose_tick_ = 0;
+  uint32_t ext_pose_session_ = 0;
+  uint32_t ext_pose_skips_ = 0;
 };
 
 }  // namespace pi_protocol

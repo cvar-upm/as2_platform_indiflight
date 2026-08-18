@@ -108,7 +108,40 @@ public:
    */
   std::optional<uint32_t> toFcTime(int64_t host_ns) const;
 
+  /**
+   * @brief Feed one round-trip exchange: the FC's stamp against the midpoint of
+   * the two host instants that bracket it.
+   *
+   * A passive sample only bounds the offset from one side, by however long the
+   * message took to arrive, so the estimate carries the link's floor latency as
+   * a bias that no amount of averaging removes. A round trip brackets the FC
+   * stamp instead: it costs one message per exchange and buys an estimate that
+   * depends on the link being symmetric rather than on it being fast, which is
+   * what makes it hold on a controller whose clock has not been characterised.
+   *
+   * @param fc_time_us Stamp the FC put in the reply, micros() domain.
+   * @param host_send_ns Host clock when the request went out.
+   * @param host_recv_ns Host clock when the reply came back.
+   * @return The round trip in nanoseconds, or nothing when it was too slow
+   *         against the best the link has shown for its midpoint to mean
+   *         anything.
+   */
+  std::optional<int64_t> syncRoundTrip(
+    uint32_t fc_time_us, int64_t host_send_ns, int64_t host_recv_ns);
+
 private:
+  /**
+   * @brief Extend a wrapping FC stamp into a monotonic microsecond count,
+   * restarting the estimate when the counter did.
+   */
+  int64_t unwrap(uint32_t fc_time_us);
+
+  /**
+   * @brief Fold one offset candidate into the window and publish the minimum.
+   * @return The offset now in use.
+   */
+  int64_t feed(int64_t candidate_offset_ns, int64_t host_now_ns);
+
   static constexpr int kNumBuckets = 8;
   // 250ms -> 2s total window. Was 2s/16s: with pi-protocol running EKF_INPUTS
   // at ~2000Hz over a dedicated 921600-baud link, even 250ms buckets still
@@ -119,6 +152,13 @@ private:
   // there, pending a real fix on the FC side.
   static constexpr int64_t kBucketDurationNs = 250'000'000;
   static constexpr int64_t kWrapPeriodUs = int64_t{1} << 32;   // ~71.6 minutes
+
+  // A reply that took far longer than this link has shown it can cannot have
+  // its midpoint trusted: the delay it met was one-sided by an unknown share.
+  static constexpr int64_t kRttGateFactor = 2;
+  // The floor rises towards a link that got permanently slower this slowly, so
+  // one lucky exchange cannot lock every later one out.
+  static constexpr int64_t kRttFloorRiseDivisor = 64;
 
   std::array<int64_t, kNumBuckets> bucket_min_offset_ns_{};
   // Offset in use, republished by sync() so that toFcTime() can read it
@@ -132,6 +172,11 @@ private:
   // Unwrapped (monotonically increasing) FC microsecond counter tracking.
   uint32_t last_fc_time_us_ = 0;
   int64_t fc_time_epoch_us_ = 0;
+
+  // Best round trip the link has shown, the yardstick every later one is
+  // judged against.
+  int64_t min_rtt_ns_ = 0;
+  bool rtt_valid_ = false;
 };
 
 }  // namespace pi_protocol

@@ -44,7 +44,7 @@
 namespace pi_protocol
 {
 
-int64_t ClockSync::sync(uint32_t fc_time_us, int64_t host_now_ns)
+int64_t ClockSync::unwrap(uint32_t fc_time_us)
 {
   if (!initialized_) {
     last_fc_time_us_ = fc_time_us;
@@ -54,19 +54,29 @@ int64_t ClockSync::sync(uint32_t fc_time_us, int64_t host_now_ns)
     if (last_fc_time_us_ - fc_time_us > kHalfRangeUs) {
       // fc_time_us wrapped (uint32_t microsecond counter, ~71.6 minute period).
       fc_time_epoch_us_ += kWrapPeriodUs;
+    } else {
+      // Too small to be a wrap: micros() restarted, so the offset is stale.
+      initialized_ = false;
+      fc_time_epoch_us_ = 0;
+      offset_valid_.store(false, std::memory_order_release);
+      // The old link's round trips say nothing about the new one.
+      rtt_valid_ = false;
     }
   }
   last_fc_time_us_ = fc_time_us;
 
-  const int64_t unwrapped_fc_time_us = fc_time_epoch_us_ + static_cast<int64_t>(fc_time_us);
-  const int64_t candidate_offset_ns = host_now_ns - unwrapped_fc_time_us * 1000;
+  return fc_time_epoch_us_ + static_cast<int64_t>(fc_time_us);
+}
 
+int64_t ClockSync::feed(int64_t candidate_offset_ns, int64_t host_now_ns)
+{
   if (!initialized_) {
     bucket_min_offset_ns_.fill(candidate_offset_ns);
     current_bucket_start_ns_ = host_now_ns;
     initialized_ = true;
   } else if (host_now_ns - current_bucket_start_ns_ > kBucketDurationNs) {
-    // Rotate into the next bucket, aging out whatever sample sat there ~16s ago.
+    // Rotate into the next bucket, aging out whatever sample sat there a whole
+    // window ago.
     current_bucket_ = (current_bucket_ + 1) % kNumBuckets;
     current_bucket_start_ns_ = host_now_ns;
     bucket_min_offset_ns_[current_bucket_] = candidate_offset_ns;
@@ -79,8 +89,42 @@ int64_t ClockSync::sync(uint32_t fc_time_us, int64_t host_now_ns)
     bucket_min_offset_ns_.begin(), bucket_min_offset_ns_.end());
   published_offset_ns_.store(offset_ns, std::memory_order_relaxed);
   offset_valid_.store(true, std::memory_order_release);
+  return offset_ns;
+}
 
+int64_t ClockSync::sync(uint32_t fc_time_us, int64_t host_now_ns)
+{
+  const int64_t unwrapped_fc_time_us = unwrap(fc_time_us);
+  const int64_t offset_ns = feed(host_now_ns - unwrapped_fc_time_us * 1000, host_now_ns);
   return unwrapped_fc_time_us * 1000 + offset_ns;
+}
+
+std::optional<int64_t> ClockSync::syncRoundTrip(
+  uint32_t fc_time_us, int64_t host_send_ns, int64_t host_recv_ns)
+{
+  const int64_t rtt_ns = host_recv_ns - host_send_ns;
+  if (rtt_ns < 0) {
+    return std::nullopt;
+  }
+
+  if (!rtt_valid_) {
+    min_rtt_ns_ = rtt_ns;
+    rtt_valid_ = true;
+  } else if (rtt_ns < min_rtt_ns_) {
+    min_rtt_ns_ = rtt_ns;
+  } else if (rtt_ns > kRttGateFactor * min_rtt_ns_) {
+    min_rtt_ns_ += (rtt_ns - min_rtt_ns_) / kRttFloorRiseDivisor;
+    return std::nullopt;
+  }
+
+  // The FC stamped the reply somewhere between the two host instants. On a
+  // symmetric link the midpoint is the best guess at where, and unlike a
+  // passive sample it is not pushed one way by the time the frame spent on
+  // the wire: that is the whole point of paying for the round trip.
+  const int64_t host_mid_ns = host_send_ns + rtt_ns / 2;
+  const int64_t unwrapped_fc_time_us = unwrap(fc_time_us);
+  feed(host_mid_ns - unwrapped_fc_time_us * 1000, host_recv_ns);
+  return rtt_ns;
 }
 
 std::optional<int64_t> ClockSync::toHostTime(uint32_t fc_time_us) const

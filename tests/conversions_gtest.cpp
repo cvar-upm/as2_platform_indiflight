@@ -69,6 +69,23 @@ TEST(EnuToNed, IsInvolutive)
   EXPECT_TRUE(enuToNed(enuToNed(v)).isApprox(v));
 }
 
+TEST(FluToFrd, AxesMap)
+{
+  const Eigen::Vector3d frd = fluToFrd({1.0, 2.0, 3.0});
+  EXPECT_DOUBLE_EQ(frd.x(), 1.0);   // Forward stays forward, unlike enuToNed
+  EXPECT_DOUBLE_EQ(frd.y(), -2.0);  // Right = -left
+  EXPECT_DOUBLE_EQ(frd.z(), -3.0);  // Down  = -up
+}
+
+TEST(FluToFrd, UpwardsThrustIsNegativeZ)
+{
+  // The sign the FC reads as thrust: a positive FLU thrust must arrive as a
+  // negative specific force, or the INDI drives the craft into the ground.
+  const Eigen::Vector3d spf = fluToFrd({0.0, 0.0, 9.81});
+  EXPECT_LT(spf.z(), 0.0);
+  EXPECT_DOUBLE_EQ(spf.z(), -9.81);
+}
+
 TEST(EnuFluToNedFrd, LevelNoseNorthIsIdentity)
 {
   // Nose to the North, level, in ENU-FLU: yaw +90 deg about ENU z.
@@ -105,24 +122,24 @@ TEST(EnuFluToNedFrd, MapsBodyAxesConsistently)
   EXPECT_TRUE(left_ned.isApprox(enuToNed(left_enu), 1e-9));
 }
 
-TEST(YawEnuRadToNedDeg, CardinalDirections)
+TEST(YawEnuRadToNedRad, CardinalDirections)
 {
-  EXPECT_NEAR(yawEnuRadToNedDeg(0.0), 90.0, 1e-9);           // East
-  EXPECT_NEAR(yawEnuRadToNedDeg(M_PI / 2.0), 0.0, 1e-9);     // North
-  EXPECT_NEAR(yawEnuRadToNedDeg(M_PI), -90.0, 1e-9);         // West
-  EXPECT_NEAR(yawEnuRadToNedDeg(-M_PI / 2.0), 180.0 - 360.0, 1e-9);  // South -> -180
+  EXPECT_NEAR(yawEnuRadToNedRad(0.0), M_PI_2, 1e-9);         // East
+  EXPECT_NEAR(yawEnuRadToNedRad(M_PI / 2.0), 0.0, 1e-9);     // North
+  EXPECT_NEAR(yawEnuRadToNedRad(M_PI), -M_PI_2, 1e-9);       // West
+  EXPECT_NEAR(yawEnuRadToNedRad(-M_PI / 2.0), -M_PI, 1e-9);  // South -> -pi
 }
 
-TEST(YawEnuRadToNedDeg, WrapsIntoMinus180To180)
+TEST(YawEnuRadToNedRad, WrapsIntoMinusPiToPi)
 {
   for (double yaw = -3.0 * M_PI; yaw <= 3.0 * M_PI; yaw += 0.1) {
-    const double deg = yawEnuRadToNedDeg(yaw);
-    EXPECT_GE(deg, -180.0);
-    EXPECT_LT(deg, 180.0);
+    const double rad = yawEnuRadToNedRad(yaw);
+    EXPECT_GE(rad, -M_PI);
+    EXPECT_LT(rad, M_PI);
   }
 }
 
-TEST(YawEnuRadToNedDeg, MatchesQuaternionConversion)
+TEST(YawEnuRadToNedRad, MatchesQuaternionConversion)
 {
   // The scalar yaw conversion and the quaternion conversion must agree for a
   // level vehicle - they stamp the same wire message.
@@ -133,8 +150,8 @@ TEST(YawEnuRadToNedDeg, MatchesQuaternionConversion)
     const double yaw_ned = std::atan2(
       2.0 * (q_ned_frd.w() * q_ned_frd.z() + q_ned_frd.x() * q_ned_frd.y()),
       1.0 - 2.0 * (q_ned_frd.y() * q_ned_frd.y() + q_ned_frd.z() * q_ned_frd.z()));
-    const double expected_deg = yawEnuRadToNedDeg(yaw_enu);
-    const double diff = std::remainder(yaw_ned * 180.0 / M_PI - expected_deg, 360.0);
+    const double expected_rad = yawEnuRadToNedRad(yaw_enu);
+    const double diff = std::remainder(yaw_ned - expected_rad, 2.0 * M_PI);
     EXPECT_NEAR(diff, 0.0, 1e-6) << "yaw_enu = " << yaw_enu;
   }
 }
