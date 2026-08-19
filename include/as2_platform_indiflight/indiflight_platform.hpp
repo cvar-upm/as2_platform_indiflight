@@ -110,52 +110,64 @@ enum RC_CHANNELS
 class IndiflightPlatform : public as2::AerialPlatform
 {
 public:
+  /**
+   * @brief Construct the Indiflight platform, opening the pi-protocol link.
+   *
+   * @param options Node options.
+   */
   explicit IndiflightPlatform(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
+  /**
+   * @brief Destroy the Indiflight Platform object, closing the link.
+   */
   ~IndiflightPlatform();
 
 public:
+  /**
+   * @brief Create the sensor interfaces the platform publishes.
+   */
   void configureSensors() override;
+  /**
+   * @brief Declare and read the platform parameters.
+   */
   void readParameters();
 
+  /**
+   * @brief Arm or disarm the vehicle.
+   *
+   * @param state True to arm, false to disarm.
+   * @return true if the vehicle accepted the request.
+   */
   bool ownSetArmingState(bool state) override;
+  /**
+   * @brief Enter or leave offboard control.
+   *
+   * @param offboard True to take control, false to release it.
+   * @return true if the vehicle accepted the request.
+   */
   bool ownSetOffboardControl(bool offboard) override;
+  /**
+   * @brief Accept a control mode requested through the platform interface.
+   *
+   * @param msg Requested control mode.
+   * @return true if the platform accepts the mode.
+   */
   bool ownSetPlatformControlMode(const as2_msgs::msg::ControlMode & msg) override;
+  /**
+   * @brief Send the current actuator commands to the vehicle.
+   *
+   * @return true if the command was sent.
+   */
   bool ownSendCommand() override;
+  /**
+   * @brief Stop the motors immediately, without landing.
+   */
   void ownKillSwitch() override;
+  /**
+   * @brief Hold the vehicle in place with a zero setpoint.
+   */
   void ownStopPlatform() override;
 
 private:
-  /**
-   * @brief Read a parameter into param_value, declaring it first if the node
-   * has not declared it yet, and log the value that ended up in use.
-   *
-   * @param param_name Name of the parameter.
-   * @param param_value Destination, and the default when use_default is true.
-   * @param use_default Declare with param_value as default, making the
-   *        parameter optional. When false the parameter is required and the
-   *        node throws if it was not passed.
-   */
-  template<typename T>
-  void getParam(const std::string & param_name, T & param_value, bool use_default = false)
-  {
-    if (!this->has_parameter(param_name)) {
-      if (use_default) {
-        this->declare_parameter<T>(param_name, param_value);
-      } else {
-        try {
-          this->declare_parameter<T>(param_name);
-        } catch (const rclcpp::exceptions::InvalidParameterValueException & e) {
-          RCLCPP_FATAL(
-            this->get_logger(), "Required parameter <%s> was not passed to the node",
-            param_name.c_str());
-          throw;
-        }
-      }
-    }
-    this->get_parameter(param_name, param_value);
-    RCLCPP_INFO_STREAM(this->get_logger(), param_name << ": " << param_value);
-  }
-
   /**
    * @brief Compute the rate-to-pulse slopes from the configured rate limits.
    */
@@ -271,7 +283,7 @@ private:
    *
    * @return true if the RC_OVERRIDE message was written to the FC.
    */
-  bool sendAcroCommand();
+  bool sendBodyRatesCommand();
 
   /**
    * @brief The commanded thrust as a specific force in the FC's FRD body frame.
@@ -323,7 +335,7 @@ private:
   /**
    * @brief Latch the current pose as the hover reference, so that a switch to
    * HOVER holds where the vehicle is rather than wherever it was last told to
-   * go, and works coming from ACRO too, where the FC has no setpoint at all.
+   * go, and works coming from BODY_RATES too, where the FC has no setpoint at all.
    *
    * @return true if the pose could be read from TF.
    */
@@ -421,7 +433,7 @@ private:
    *
    * Fed in every control mode, not just POSITION: the FC EKF needs a couple of
    * seconds of continuous measurements to converge, so keeping it fed while
-   * flying ACRO is what makes a later switch to POSITION immediate.
+   * flying BODY_RATES is what makes a later switch to POSITION immediate.
    *
    * @param pose Pose already expressed in earth_frame_id_.
    */

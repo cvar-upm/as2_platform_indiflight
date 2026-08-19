@@ -60,13 +60,6 @@ namespace
  * @brief Name of a mocap rigid body, accepting both the string form and the
  * integer an unquoted numeric name yields in YAML.
  */
-std::string rigidBodyName(const rclcpp::Parameter & param)
-{
-  if (param.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
-    return std::to_string(param.as_int());
-  }
-  return param.as_string();
-}
 }  // namespace
 
 IndiflightPlatform::IndiflightPlatform(const rclcpp::NodeOptions & options)
@@ -124,10 +117,6 @@ IndiflightPlatform::IndiflightPlatform(const rclcpp::NodeOptions & options)
     this->get_logger(), "pi-protocol connected on %s @ %d baud",
     pi_protocol_device_.c_str(), pi_protocol_baudrate_);
 
-  // Also used by the POSITION command path, which runs whether or not the
-  // external pose uplink is enabled.
-  tf_handler_ = std::make_shared<as2::tf::TfHandler>(this);
-
   // Feed for the FC's onboard EKF. Created after the pi-protocol connection:
   // sendExternalPose() is a no-op until the first downlink message provides an
   // FC tick anyway.
@@ -182,58 +171,57 @@ IndiflightPlatform::IndiflightPlatform(const rclcpp::NodeOptions & options)
 
 void IndiflightPlatform::readParameters()
 {
-  getParam("external_odom", external_odom_);
+  external_odom_ = getParameter<bool>("external_odom");
 
-  base_link_frame_id_ = as2::tf::generateTfName(this, "base_link");
-  odom_frame_id_ = as2::tf::generateTfName(this, "odom");
+  base_link_frame_id_ = this->getBaseFrameId();
+  odom_frame_id_ = this->getOdomFrameId();
   // Not namespaced, unlike the two above: the global reference is shared.
-  earth_frame_id_ = "earth";
-  getParam("global_ref_frame", earth_frame_id_, true);
+  earth_frame_id_ = this->getEarthFrameId();
 
-  getParam("pi_protocol.device", pi_protocol_device_);
-  getParam("pi_protocol.baudrate", pi_protocol_baudrate_);
+  pi_protocol_device_ = getParameter<std::string>("pi_protocol.device");
+  pi_protocol_baudrate_ = getParameter<int>("pi_protocol.baudrate");
 
   // true: header.stamp is the FC sample instant reconstructed by
   // pi_protocol_clock_sync_. false: the arrival time, as elsewhere in AS2.
   // debug/platform/og_timestamp carries the raw FC time_ref either way.
-  getParam("use_fcu_stamps", use_fcu_stamps_, true);
-  getParam("num_rotors", num_rotors_, true);
+  use_fcu_stamps_ = getParameter("use_fcu_stamps", use_fcu_stamps_);
+  num_rotors_ = getParameter("num_rotors", num_rotors_);
   if (num_rotors_ < 1 || num_rotors_ > 6) {
     throw std::runtime_error("num_rotors must be in [1, 6]");
   }
-  getParam("debug_topics.rc_command", debug_rc_command_topic_, true);
-  getParam("debug_topics.og_timestamp", debug_og_timestamp_topic_, true);
-  getParam("debug_topics.pi_status", debug_pi_status_topic_, true);
-  getParam("debug_topics.rc", debug_rc_topic_, true);
+  debug_rc_command_topic_ = getParameter("debug_topics.rc_command", debug_rc_command_topic_);
+  debug_og_timestamp_topic_ = getParameter("debug_topics.og_timestamp", debug_og_timestamp_topic_);
+  debug_pi_status_topic_ = getParameter("debug_topics.pi_status", debug_pi_status_topic_);
+  debug_rc_topic_ = getParameter("debug_topics.rc", debug_rc_topic_);
 
-  getParam("imu.covariance.gyro", imu_gyro_covariance_, true);
-  getParam("imu.covariance.accel", imu_accel_covariance_, true);
+  imu_gyro_covariance_ = getParameter("imu.covariance.gyro", imu_gyro_covariance_);
+  imu_accel_covariance_ = getParameter("imu.covariance.accel", imu_accel_covariance_);
 
   // Rotation (rad) from indiflight's FRD firmware frame to the body frame.
   // The default r = pi is FRD -> FLU.
   desired_frame_roll_ = M_PI;
-  getParam("desired_frame_T.r", desired_frame_roll_, true);
-  getParam("desired_frame_T.p", desired_frame_pitch_, true);
-  getParam("desired_frame_T.y", desired_frame_yaw_, true);
+  desired_frame_roll_ = getParameter("desired_frame_T.r", desired_frame_roll_);
+  desired_frame_pitch_ = getParameter("desired_frame_T.p", desired_frame_pitch_);
+  desired_frame_yaw_ = getParameter("desired_frame_T.y", desired_frame_yaw_);
   desired_frame_rotation_ =
     (Eigen::AngleAxisd(desired_frame_yaw_, Eigen::Vector3d::UnitZ()) *
     Eigen::AngleAxisd(desired_frame_pitch_, Eigen::Vector3d::UnitY()) *
     Eigen::AngleAxisd(desired_frame_roll_, Eigen::Vector3d::UnitX())).toRotationMatrix();
 
-  getParam("mass", mass_);
+  mass_ = getParameter<double>("mass");
   if (mass_ <= 0.0) {
     throw std::runtime_error("mass must be strictly positive, it divides the commanded thrust");
   }
 
   // Command limits
-  getParam("thrust.max", max_thrust_);
-  getParam("thrust.min", min_thrust_);
-  getParam("roll_rate.max", max_roll_rate_);
-  getParam("roll_rate.min", min_roll_rate_);
-  getParam("pitch_rate.max", max_pitch_rate_);
-  getParam("pitch_rate.min", min_pitch_rate_);
-  getParam("yaw_rate.max", max_yaw_rate_);
-  getParam("yaw_rate.min", min_yaw_rate_);
+  max_thrust_ = getParameter<double>("thrust.max");
+  min_thrust_ = getParameter<double>("thrust.min");
+  max_roll_rate_ = getParameter<double>("roll_rate.max");
+  min_roll_rate_ = getParameter<double>("roll_rate.min");
+  max_pitch_rate_ = getParameter<double>("pitch_rate.max");
+  min_pitch_rate_ = getParameter<double>("pitch_rate.min");
+  max_yaw_rate_ = getParameter<double>("yaw_rate.max");
+  min_yaw_rate_ = getParameter<double>("yaw_rate.min");
   // Convert limits from deg/s to rad/s for the control slopes and the limiters.
   max_roll_rate_ = convert_deg_s_to_rad_s(max_roll_rate_);
   min_roll_rate_ = convert_deg_s_to_rad_s(min_roll_rate_);
@@ -243,16 +231,16 @@ void IndiflightPlatform::readParameters()
   min_yaw_rate_ = convert_deg_s_to_rad_s(min_yaw_rate_);
   computeControlSlopes();
 
-  getParam("use_thrust_map", use_thrust_map_);
-  getParam("limit_output", limit_output_);
-  getParam("limit_roll_percent", limit_roll_percent_);
-  getParam("limit_pitch_percent", limit_pitch_percent_);
-  getParam("limit_yaw_percent", limit_yaw_percent_);
-  getParam("limit_thrust_percent", limit_thrust_percent_);
+  use_thrust_map_ = getParameter<bool>("use_thrust_map");
+  limit_output_ = getParameter<bool>("limit_output");
+  limit_roll_percent_ = getParameter<double>("limit_roll_percent");
+  limit_pitch_percent_ = getParameter<double>("limit_pitch_percent");
+  limit_yaw_percent_ = getParameter<double>("limit_yaw_percent");
+  limit_thrust_percent_ = getParameter<double>("limit_thrust_percent");
 
-  getParam("alpha_voltage", alpha_voltage_);
-  getParam("min_cell_voltage", min_cell_voltage_);
-  getParam("max_cell_voltage", max_cell_voltage_);
+  alpha_voltage_ = getParameter<double>("alpha_voltage");
+  min_cell_voltage_ = getParameter<double>("min_cell_voltage");
+  max_cell_voltage_ = getParameter<double>("max_cell_voltage");
 
   // Pose forwarded to the FC's onboard EKF as EXTERNAL_POSE (NED), in every
   // control mode. The non-empty topic parameter selects the source:
@@ -261,21 +249,21 @@ void IndiflightPlatform::readParameters()
   //   mocap_topic set -> that mocap4r2_msgs/RigidBodies topic, body picked by
   //                      rigid_body_name
   // Feeding the FC from TF while AS2 consumes the FC estimate would be a loop.
-  getParam("external_pose.enable", external_pose_enable_);
+  external_pose_enable_ = getParameter<bool>("external_pose.enable");
   if (external_pose_enable_) {
-    getParam("external_pose.rate", external_pose_rate_, true);
-    getParam("external_pose.pose_topic", external_pose_pose_topic_, true);
+    external_pose_rate_ = getParameter("external_pose.rate", external_pose_rate_);
+    external_pose_pose_topic_ = getParameter("external_pose.pose_topic", external_pose_pose_topic_);
     if (external_pose_pose_topic_.empty()) {
-      getParam("external_pose.mocap_topic", external_pose_mocap_topic_, true);
+      external_pose_mocap_topic_ = getParameter(
+        "external_pose.mocap_topic",
+        external_pose_mocap_topic_);
       if (!external_pose_mocap_topic_.empty()) {
-        getParam("external_pose.rigid_body_name", external_pose_rigid_body_name_);
+        external_pose_rigid_body_name_ = getParameter<std::string>("external_pose.rigid_body_name");
         if (external_pose_rigid_body_name_.empty()) {
           RCLCPP_FATAL(
             this->get_logger(),
             "external_pose.rigid_body_name must be set when external_pose.mocap_topic is set");
         }
-        external_pose_rigid_body_name_ =
-          rigidBodyName(this->get_parameter("external_pose.rigid_body_name"));
       }
     }
     if (!external_pose_pose_topic_.empty() && !external_pose_mocap_topic_.empty()) {
@@ -352,10 +340,12 @@ bool IndiflightPlatform::ownSetOffboardControl(bool offboard)
 
 bool IndiflightPlatform::ownSetPlatformControlMode(const as2_msgs::msg::ControlMode & msg)
 {
-  // as2::AerialPlatform forwards the raw request without checking it against
-  // control_modes.yaml, so this switch is the real capability gate. UNSET is
-  // absent on purpose: it is the mode the platform starts in, not one that can
-  // be requested.
+  // The FC position controller tracks setpoints in the global ENU frame
+  setCommandPoseFrameId(earth_frame_id_);
+  setCommandTwistFrameId(earth_frame_id_);
+
+  // UNSET is absent on purpose: it is the mode the platform starts in, not one
+  // that can be requested.
   switch (msg.control_mode) {
     case as2_msgs::msg::ControlMode::HOVER:
       if (!acceptHover()) {
@@ -406,7 +396,7 @@ bool IndiflightPlatform::ownSendCommand()
     case as2_msgs::msg::ControlMode::ATTITUDE:
       return sendAttitudeCommand();
     case as2_msgs::msg::ControlMode::BODY_RATES:
-      return sendAcroCommand();
+      return sendBodyRatesCommand();
     case as2_msgs::msg::ControlMode::UNSET:
       RCLCPP_WARN_THROTTLE(
         this->get_logger(), *this->get_clock(), 1000,
@@ -506,7 +496,8 @@ bool IndiflightPlatform::sendHoverCommand()
 
 bool IndiflightPlatform::sendPositionCommand()
 {
-  geometry_msgs::msg::PoseStamped pose = command_pose_msg_;
+  // as2::AerialPlatform already delivered the command in the declared frame
+  const geometry_msgs::msg::PoseStamped & pose = command_pose_msg_;
   // An empty frame_id means no pose reference has arrived yet: a
   // default-constructed pose would command the origin with a zero quaternion
   // (NaN yaw). Refuse it.
@@ -514,13 +505,6 @@ bool IndiflightPlatform::sendPositionCommand()
     RCLCPP_WARN_THROTTLE(
       this->get_logger(), *this->get_clock(), 1000,
       "POSITION mode active but no pose reference received yet - not sent");
-    return false;
-  }
-  if (!toEarthFrame(pose)) {
-    RCLCPP_ERROR_THROTTLE(
-      this->get_logger(), *this->get_clock(), 1000,
-      "POSITION command in frame '%s', could not convert to '%s' - not sent",
-      pose.header.frame_id.c_str(), earth_frame_id_.c_str());
     return false;
   }
 
@@ -666,7 +650,7 @@ bool IndiflightPlatform::sendAcroSetpoint()
   return true;
 }
 
-bool IndiflightPlatform::sendAcroCommand()
+bool IndiflightPlatform::sendBodyRatesCommand()
 {
   // The pilot's switch picks the offboard language, and the two are exclusive
   if (fc_pos_ctl_active_) {
