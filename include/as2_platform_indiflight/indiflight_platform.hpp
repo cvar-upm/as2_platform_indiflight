@@ -265,7 +265,7 @@ private:
   void updatePlatformState(bool armed, bool offboard);
 
   /**
-   * @brief Send the ACRO references (command_twist_msg_ body rates and
+   * @brief Send the BODY_RATES references (command_twist_msg_ body rates and
    * command_thrust_msg_) as RC_OVERRIDE stick pulses, saturated and mapped
    * through the rate limits and the thrust map.
    *
@@ -281,7 +281,7 @@ private:
   Eigen::Vector3d specificForceFrd() const;
 
   /**
-   * @brief Send the ACRO references as a SETPOINT in SI units, which reach the
+   * @brief Send the BODY_RATES references as an ACRO SETPOINT in SI units, which reach the
    * INDI without the pilot's rate curve or throttle scaling.
    *
    * @return true if the SETPOINT message was written to the FC.
@@ -466,7 +466,7 @@ private:
   // SETPOINT carries, since neither the message nor the FC knows the mass
   double mass_;
 
-  // ACRO command mapping, from rate and thrust references to RC_OVERRIDE pulses
+  // BODY_RATES command mapping, from rate and thrust references to RC_OVERRIDE pulses
   double max_thrust_;
   double min_thrust_;
   double min_roll_rate_;

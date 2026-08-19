@@ -34,14 +34,14 @@
 #   SPEED + YAW ANGLE + ENU
 #   SPEED + YAW SPEED + ENU
 #   ATTITUDE + YAW ANGLE + ENU
-#   ACRO + YAW SPEED + FLU
+#   BODY_RATES + YAW SPEED + FLU
 #
 #-----------------------------------------------------------------
 
 available_modes:
   # - 0b00000000 # UNSET
   - 0b00010000 # HOVER
-  - 0b00100100 # ACRO (p,q,r, Thrust)
+  - 0b00100100 # BODY_RATES (p,q,r, Thrust)
   - 0b00110001 # ATTITUDE with yaw ANGLE ( r,p,y , Thrust) 
   # - 0b00110101 # ATTITUDE with yaw SPEED ( r,p, dy , Thrust) 
   # - 0b01000000 # SPEED with yaw ANGLE in the LOCAL_FLU_FRAME
