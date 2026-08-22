@@ -512,7 +512,7 @@ bool IndiflightPlatform::sendPositionCommand()
   const Eigen::Vector3d limit_ned = enuToNed(
     Eigen::Vector3d(
       command_twist_msg_.twist.linear.x, command_twist_msg_.twist.linear.y,
-      command_twist_msg_.twist.linear.z));
+      command_twist_msg_.twist.linear.z)).cwiseAbs();
 
   return sendPoseSetpoint(pose, limit_ned, SETPOINT_POSITION);
 }
