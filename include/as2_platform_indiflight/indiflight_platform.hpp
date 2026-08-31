@@ -47,6 +47,7 @@
 #include <vector>
 
 #include <rclcpp/subscription.hpp>
+#include <rclcpp/timer.hpp>
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
@@ -166,6 +167,14 @@ private:
   // single dedicated reader thread - see PiProtocolClockSync's own comment.
   PiProtocolClockSync pi_protocol_clock_sync_;
 
+  // TIMESYNC round-trip uplink: sent once on connect and then every second.
+  // timesync_seq_ is log-correlation only, not RTT-load-bearing - the reply
+  // echoes host_ns verbatim, so RTT/offset are computed from that alone (see
+  // onPiTimesync()), with no pending-request state to track.
+  rclcpp::TimerBase::SharedPtr timesync_timer_;
+  uint32_t timesync_seq_ = 0;
+  void sendTimesyncRequest();
+
   /**
    * @brief Callback for pi-protocol EKF_INPUTS messages: a single synchronized
    * bundle (accel + gyro + all 4 motor speeds, one sample each, one time_us),
@@ -191,6 +200,13 @@ private:
    * voltage_ (used by the voltage-aware thrust map).
    */
   void onPiBattery(const pi_BATTERY_t & msg);
+
+  /**
+   * @brief Callback for pi-protocol TIMESYNC replies: feeds the round-trip
+   * offset estimate (see PiProtocolClockSync::syncRoundTrip()) and logs
+   * lock/RTT.
+   */
+  void onPiTimesync(const pi_TIMESYNC_t & msg);
 
   void computeControlSlopes()
   {

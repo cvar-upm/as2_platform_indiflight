@@ -47,8 +47,8 @@ if(NOT EXISTS ${LOCAL_PI_PROTOCOL_SRC}/config.yaml)
   include(FetchContent)
   fetchcontent_declare(
     pi_protocol_src
-    GIT_REPOSITORY https://github.com/fjanguita/pi-protocol.git
-    GIT_TAG de8fa7fd41036ffa1734f458aef455dbae4305a8  # adds RC_OVERRIDE, PI_STATUS, BATTERY messages
+    GIT_REPOSITORY https://github.com/cvar-upm/pi-protocol.git
+    GIT_TAG 9acf9e3f87d9738f863444da78be23085309181e  # adds RC_OVERRIDE, PI_STATUS, BATTERY, TIMESYNC messages
     SOURCE_DIR ${LOCAL_PI_PROTOCOL_SRC}
   )
   fetchcontent_populate(pi_protocol_src)

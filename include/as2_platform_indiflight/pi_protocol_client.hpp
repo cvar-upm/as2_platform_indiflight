@@ -64,6 +64,7 @@ public:
   using EkfInputsCallback = std::function<void (const pi_EKF_INPUTS_t &)>;
   using StatusCallback = std::function<void (const pi_PI_STATUS_t &)>;
   using BatteryCallback = std::function<void (const pi_BATTERY_t &)>;
+  using TimesyncCallback = std::function<void (const pi_TIMESYNC_t &)>;
 
   PiProtocolClient() = default;
   ~PiProtocolClient();
@@ -120,6 +121,13 @@ public:
   void setBatteryCallback(BatteryCallback callback) {battery_callback_ = std::move(callback);}
 
   /**
+   * @brief Set the callback invoked for every successfully parsed TIMESYNC
+   * reply. Must be set before connect() to reliably receive the first
+   * messages.
+   */
+  void setTimesyncCallback(TimesyncCallback callback) {timesync_callback_ = std::move(callback);}
+
+  /**
    * @brief Send an RC_OVERRIDE message - the roll/pitch/yaw/throttle stick
    * override for indiflight's PI OVERRIDE box mode. Values follow
    * Betaflight's usual 1000-2000 pulse convention. Only takes effect on the
@@ -129,6 +137,14 @@ public:
    * failed.
    */
   bool sendRcOverride(uint16_t roll, uint16_t pitch, uint16_t yaw, uint16_t throttle);
+
+  /**
+   * @brief Send a TIMESYNC request - seq/host_ns as given, fc_time_us = 0.
+   * The FC echoes seq/host_ns verbatim and fills fc_time_us in on reply.
+   * @return true on a successful write, false if not connected or the write
+   * failed.
+   */
+  bool sendTimesync(uint32_t seq, uint64_t host_ns);
 
 private:
   void readLoop();
@@ -142,6 +158,7 @@ private:
   EkfInputsCallback ekf_inputs_callback_;
   StatusCallback status_callback_;
   BatteryCallback battery_callback_;
+  TimesyncCallback timesync_callback_;
   pi_parse_states_t parse_state_{};
 };
 

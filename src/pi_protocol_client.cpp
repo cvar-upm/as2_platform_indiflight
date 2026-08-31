@@ -159,6 +159,8 @@ void PiProtocolClient::readLoop()
         status_callback_(*piMsgPiStatusRx);
       } else if (msg_id == PI_MSG_BATTERY_ID && piMsgBatteryRx != nullptr && battery_callback_) {
         battery_callback_(*piMsgBatteryRx);
+      } else if (msg_id == PI_MSG_TIMESYNC_ID && piMsgTimesyncRx != nullptr && timesync_callback_) {
+        timesync_callback_(*piMsgTimesyncRx);
       }
     }
   }
@@ -189,6 +191,15 @@ bool PiProtocolClient::sendRcOverride(uint16_t roll, uint16_t pitch, uint16_t ya
   piMsgRcOverrideTx.throttle = throttle;
 
   return sendMsg(&piMsgRcOverrideTx);
+}
+
+bool PiProtocolClient::sendTimesync(uint32_t seq, uint64_t host_ns)
+{
+  piMsgTimesyncTx.seq = seq;
+  piMsgTimesyncTx.host_ns = host_ns;
+  piMsgTimesyncTx.fc_time_us = 0;  // request; FC fills this in on reply
+
+  return sendMsg(&piMsgTimesyncTx);
 }
 
 }  // namespace as2_platform_indiflight

@@ -37,6 +37,8 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
+#include <optional>
 
 namespace as2_platform_indiflight
 {
@@ -70,7 +72,45 @@ public:
    */
   int64_t sync(uint32_t fc_time_us, int64_t host_now_ns);
 
+  /**
+   * @brief Feed one round-trip TIMESYNC exchange: fc_time_us is the FC's own
+   * stamp, echoed back at the moment it handled the request; host_send_ns and
+   * host_recv_ns bracket that on the host side. Unlike a passive sample (see
+   * sync()), which is always biased high by one-way transit time, placing the
+   * FC stamp at the midpoint of the round trip removes that bias - so an
+   * accepted round-trip candidate feeds the very same windowed-minimum filter
+   * sync() uses, wins the minimum on its own merit, and holds until it ages
+   * out, rather than needing a second, separate estimator.
+   *
+   * A reply slower than kRttGateFactor times the best round trip seen so far
+   * is rejected: its delay was probably one-sided, so its midpoint doesn't
+   * mean anything. The floor itself creeps towards a link that got
+   * permanently worse (see kRttFloorRiseDivisor), so one lucky early exchange
+   * doesn't lock every later one out.
+   *
+   * @return the resulting host-clock timestamp for fc_time_us if the sample
+   * was accepted, std::nullopt if it was RTT-gated out.
+   */
+  std::optional<int64_t> syncRoundTrip(
+    uint32_t fc_time_us, int64_t host_send_ns, int64_t host_recv_ns);
+
 private:
+  // Wrap-safe unwrap of the FC's free-running microsecond counter, shared by
+  // both sync() and syncRoundTrip() so the delicate wrap/restart handling
+  // lives in exactly one place.
+  int64_t unwrap(uint32_t fc_time_us);
+
+  // Fold one offset candidate into the bucket window and return the
+  // resulting host-clock timestamp for unwrapped_fc_time_us. Shared by both
+  // sync() and syncRoundTrip().
+  int64_t feed(int64_t unwrapped_fc_time_us, int64_t candidate_offset_ns, int64_t host_now_ns);
+
+  static constexpr int64_t kRttGateFactor = 2;
+  static constexpr int64_t kRttFloorRiseDivisor = 64;
+  // "No floor yet" sentinel - the gate never rejects until a first RTT has
+  // actually been observed.
+  int64_t best_rtt_ns_ = std::numeric_limits<int64_t>::max();
+
   static constexpr int kNumBuckets = 8;
   // 250ms -> 2s total window. Was 2s/16s: with pi-protocol running EKF_INPUTS
   // at ~2000Hz over a dedicated 921600-baud link, even 250ms buckets still

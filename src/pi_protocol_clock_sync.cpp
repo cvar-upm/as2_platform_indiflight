@@ -35,7 +35,7 @@
 namespace as2_platform_indiflight
 {
 
-int64_t PiProtocolClockSync::sync(uint32_t fc_time_us, int64_t host_now_ns)
+int64_t PiProtocolClockSync::unwrap(uint32_t fc_time_us)
 {
   if (!initialized_) {
     last_fc_time_us_ = fc_time_us;
@@ -48,9 +48,12 @@ int64_t PiProtocolClockSync::sync(uint32_t fc_time_us, int64_t host_now_ns)
   }
   last_fc_time_us_ = fc_time_us;
 
-  const int64_t unwrapped_fc_time_us = fc_time_epoch_us_ + static_cast<int64_t>(fc_time_us);
-  const int64_t candidate_offset_ns = host_now_ns - unwrapped_fc_time_us * 1000;
+  return fc_time_epoch_us_ + static_cast<int64_t>(fc_time_us);
+}
 
+int64_t PiProtocolClockSync::feed(
+  int64_t unwrapped_fc_time_us, int64_t candidate_offset_ns, int64_t host_now_ns)
+{
   if (!initialized_) {
     bucket_min_offset_ns_.fill(candidate_offset_ns);
     current_bucket_start_ns_ = host_now_ns;
@@ -69,6 +72,40 @@ int64_t PiProtocolClockSync::sync(uint32_t fc_time_us, int64_t host_now_ns)
     bucket_min_offset_ns_.begin(), bucket_min_offset_ns_.end());
 
   return unwrapped_fc_time_us * 1000 + offset_ns;
+}
+
+int64_t PiProtocolClockSync::sync(uint32_t fc_time_us, int64_t host_now_ns)
+{
+  const int64_t unwrapped_fc_time_us = unwrap(fc_time_us);
+  const int64_t candidate_offset_ns = host_now_ns - unwrapped_fc_time_us * 1000;
+  return feed(unwrapped_fc_time_us, candidate_offset_ns, host_now_ns);
+}
+
+std::optional<int64_t> PiProtocolClockSync::syncRoundTrip(
+  uint32_t fc_time_us, int64_t host_send_ns, int64_t host_recv_ns)
+{
+  const int64_t rtt_ns = host_recv_ns - host_send_ns;
+
+  if (best_rtt_ns_ != std::numeric_limits<int64_t>::max() &&
+    rtt_ns > kRttGateFactor * best_rtt_ns_)
+  {
+    // This reply's delay was probably one-sided - its midpoint doesn't
+    // bracket the FC stamp meaningfully.
+    return std::nullopt;
+  }
+
+  if (rtt_ns < best_rtt_ns_) {
+    best_rtt_ns_ = rtt_ns;
+  } else {
+    // Let the floor creep up slowly so a link that's genuinely gotten worse
+    // isn't locked out forever by one lucky early low-RTT sample.
+    best_rtt_ns_ += (rtt_ns - best_rtt_ns_) / kRttFloorRiseDivisor;
+  }
+
+  const int64_t midpoint_ns = host_send_ns + rtt_ns / 2;
+  const int64_t unwrapped_fc_time_us = unwrap(fc_time_us);
+  const int64_t candidate_offset_ns = midpoint_ns - unwrapped_fc_time_us * 1000;
+  return feed(unwrapped_fc_time_us, candidate_offset_ns, midpoint_ns);
 }
 
 }  // namespace as2_platform_indiflight

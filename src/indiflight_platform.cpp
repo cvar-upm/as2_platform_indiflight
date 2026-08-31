@@ -36,6 +36,7 @@
  */
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -258,6 +259,8 @@ IndiflightPlatform::IndiflightPlatform(const rclcpp::NodeOptions & options)
       [this](const pi_PI_STATUS_t & msg) {onPiStatus(msg);});
     pi_protocol_client_.setBatteryCallback(
       [this](const pi_BATTERY_t & msg) {onPiBattery(msg);});
+    pi_protocol_client_.setTimesyncCallback(
+      [this](const pi_TIMESYNC_t & msg) {onPiTimesync(msg);});
     if (!pi_protocol_client_.connect(pi_protocol_device_, pi_protocol_baudrate_)) {
       RCLCPP_ERROR(
         this->get_logger(), "Could not connect to pi-protocol device %s",
@@ -267,6 +270,10 @@ IndiflightPlatform::IndiflightPlatform(const rclcpp::NodeOptions & options)
     RCLCPP_INFO(
       this->get_logger(), "pi-protocol connected on %s @ %d baud",
       pi_protocol_device_.c_str(), pi_protocol_baudrate_);
+
+    sendTimesyncRequest();  // fire immediately - don't wait on the first timer tick
+    timesync_timer_ = this->create_wall_timer(
+      std::chrono::seconds(1), [this]() {sendTimesyncRequest();});
   } else {
     RCLCPP_WARN(
       this->get_logger(),
@@ -599,6 +606,29 @@ void IndiflightPlatform::onPiStatus(const pi_PI_STATUS_t & msg)
     static_cast<uint16_t>(rx_link_valid)};
   debug_msg.stamp = this->now();
   debug_pi_status_pub_->publish(debug_msg);
+}
+
+void IndiflightPlatform::sendTimesyncRequest()
+{
+  const int64_t host_ns = this->get_clock()->now().nanoseconds();
+  pi_protocol_client_.sendTimesync(timesync_seq_++, static_cast<uint64_t>(host_ns));
+}
+
+void IndiflightPlatform::onPiTimesync(const pi_TIMESYNC_t & msg)
+{
+  const int64_t host_recv_ns = this->get_clock()->now().nanoseconds();
+  const int64_t host_send_ns = static_cast<int64_t>(msg.host_ns);  // echoed verbatim by the FC
+
+  const auto offset_ns = pi_protocol_clock_sync_.syncRoundTrip(
+    msg.fc_time_us, host_send_ns, host_recv_ns);
+
+  if (offset_ns.has_value()) {
+    RCLCPP_INFO(
+      this->get_logger(), "TIMESYNC seq=%u locked, rtt=%.2fms",
+      msg.seq, (host_recv_ns - host_send_ns) / 1e6);
+  } else {
+    RCLCPP_DEBUG(this->get_logger(), "TIMESYNC seq=%u rejected (RTT gate)", msg.seq);
+  }
 }
 
 void IndiflightPlatform::onRc(const msp::msg::Rc & rc)
