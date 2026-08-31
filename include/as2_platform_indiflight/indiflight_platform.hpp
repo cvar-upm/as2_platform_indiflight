@@ -523,7 +523,6 @@ private:
   // FC state from PI_STATUS, which the control modes are gated on.
   bool fc_ekf_converged_ = false;
   bool fc_pos_ctl_active_ = false;
-  std::shared_ptr<as2::tf::TfHandler> tf_handler_;
   // Exactly one of these is created, per the source parameters above.
   rclcpp::TimerBase::SharedPtr external_pose_timer_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr external_pose_sub_;
