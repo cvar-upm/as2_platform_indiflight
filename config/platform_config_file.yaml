@@ -11,6 +11,7 @@
     external_pose:  # Pose forwarded to the FC's onboard EKF as EXTERNAL_POSE
       enable: false  # (default: false)
       pose_topic: ""  # geometry_msgs/msg/PoseStamped source
+      twist_topic: ""  # geometry_msgs/msg/TwistStamped sent with the pose. Needs pose_topic
       mocap_topic: ""  # mocap4r2_msgs/msg/RigidBodies source, excludes pose_topic
       rigid_body_name: ""  # Body to forward. Required with mocap_topic
       rate: 100.0  # Hz of the earth->base_link TF poll, used when no topic is set

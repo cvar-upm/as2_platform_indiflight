@@ -418,6 +418,13 @@ private:
   void onExternalPose(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
 
   /**
+   * @brief Subscription callback for the topic twist source
+   *
+   * @param msg Twist received on external_pose.twist_topic
+   */
+  void onExternalTwist(const geometry_msgs::msg::TwistStamped::SharedPtr msg);
+
+  /**
    * @brief Subscription callback for the mocap4r2 topic source: pick the
    * external_pose.rigid_body_name body out of the message, then behave like
    * onExternalPose(). Bodies are matched by name because a mocap publishes
@@ -513,6 +520,10 @@ private:
   std::string external_pose_pose_topic_;
   std::string external_pose_mocap_topic_;
   std::string external_pose_rigid_body_name_;
+  // Velocity to send alongside the pose. Empty leaves the FC to infer it from
+  // the position it receives.
+  std::string external_pose_twist_topic_;
+  std::optional<geometry_msgs::msg::TwistStamped> last_external_twist_;
   // Stamp of the last pose forwarded to the FC, to skip unchanged ones.
   // Nanoseconds rather than rclcpp::Time, whose comparison throws when the two
   // operands carry different clock types. The optional distinguishes "nothing
@@ -527,6 +538,7 @@ private:
   rclcpp::TimerBase::SharedPtr external_pose_timer_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr external_pose_sub_;
   rclcpp::Subscription<mocap4r2_msgs::msg::RigidBodies>::SharedPtr external_rigid_bodies_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr external_twist_sub_;
 
   // Platform state, mirrored from the FC
   bool external_odom_ = true;

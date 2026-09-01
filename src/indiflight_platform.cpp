@@ -143,6 +143,14 @@ IndiflightPlatform::IndiflightPlatform(const rclcpp::NodeOptions & options)
         this->get_logger(), "Forwarding %s->%s TF to the FC EKF as EXTERNAL_POSE at %.1f Hz",
         earth_frame_id_.c_str(), base_link_frame_id_.c_str(), external_pose_rate_);
     }
+    if (!external_pose_twist_topic_.empty()) {
+      external_twist_sub_ = this->create_subscription<geometry_msgs::msg::TwistStamped>(
+        external_pose_twist_topic_, rclcpp::SensorDataQoS(),
+        std::bind(&IndiflightPlatform::onExternalTwist, this, std::placeholders::_1));
+      RCLCPP_INFO(
+        this->get_logger(), "Forwarding '%s' to the FC EKF as EXTERNAL_VELOCITY",
+        external_pose_twist_topic_.c_str());
+    }
   }
 
   // One second never trips on a healthy link: EKF_INPUTS alone arrives at 500Hz.
@@ -253,6 +261,9 @@ void IndiflightPlatform::readParameters()
   if (external_pose_enable_) {
     external_pose_rate_ = getParameter("external_pose.rate", external_pose_rate_);
     external_pose_pose_topic_ = getParameter("external_pose.pose_topic", external_pose_pose_topic_);
+    external_pose_twist_topic_ = getParameter(
+      "external_pose.twist_topic",
+      external_pose_twist_topic_);
     if (external_pose_pose_topic_.empty()) {
       external_pose_mocap_topic_ = getParameter(
         "external_pose.mocap_topic",
@@ -270,6 +281,13 @@ void IndiflightPlatform::readParameters()
       RCLCPP_FATAL(
         this->get_logger(),
         "external_pose pose_topic and mocap_topic are mutually exclusive");
+    }
+    if (!external_pose_twist_topic_.empty() && external_pose_pose_topic_.empty()) {
+      RCLCPP_FATAL(
+        this->get_logger(),
+        "external_pose.twist_topic needs pose_topic: the mocap and TF sources carry no "
+        "pose the twist is stamped with");
+      external_pose_twist_topic_.clear();
     }
     if (external_pose_mocap_topic_.empty() && external_pose_pose_topic_.empty() &&
       external_pose_rate_ <= 0.0)
@@ -924,6 +942,11 @@ void IndiflightPlatform::onExternalRigidBodies(
     external_pose_rigid_body_name_.c_str(), external_pose_mocap_topic_.c_str());
 }
 
+void IndiflightPlatform::onExternalTwist(const geometry_msgs::msg::TwistStamped::SharedPtr msg)
+{
+  last_external_twist_ = *msg;
+}
+
 void IndiflightPlatform::sendExternalPose(const geometry_msgs::msg::PoseStamped & pose)
 {
   // Skip a pose already forwarded: the TF poll runs faster than the estimator
@@ -956,15 +979,49 @@ void IndiflightPlatform::sendExternalPose(const geometry_msgs::msg::PoseStamped 
     return;
   }
 
-  // Mocap gives position and attitude; the velocity would have to be
-  // differentiated here and the FC would write it straight into the state.
+  // Compute the velocity
+  Eigen::Vector3d vel_ned = Eigen::Vector3d::Zero();
+  uint8_t mode = EXT_POSE_USE_POS | EXT_POSE_USE_QUAT;
+  if (last_external_twist_) {
+    // Check if twist is synchronized with the pose
+    const geometry_msgs::msg::TwistStamped & twist = *last_external_twist_;
+    const int64_t twist_ns = rclcpp::Time(twist.header.stamp).nanoseconds();
+    const auto skew = std::chrono::nanoseconds(twist_ns - stamp_ns);
+
+    if (std::chrono::abs(skew) < std::chrono::milliseconds(1)) {
+      // Convert to desired frame
+      Eigen::Vector3d linear(twist.twist.linear.x, twist.twist.linear.y, twist.twist.linear.z);
+      if (twist.header.frame_id == base_link_frame_id_) {
+        const Eigen::Quaterniond q_enu_flu(
+          pose.pose.orientation.w, pose.pose.orientation.x,
+          pose.pose.orientation.y, pose.pose.orientation.z);
+        vel_ned = enuToNed(q_enu_flu * linear);
+        mode |= EXT_POSE_USE_VEL;
+      } else if (twist.header.frame_id == earth_frame_id_) {
+        vel_ned = enuToNed(linear);
+        mode |= EXT_POSE_USE_VEL;
+      } else {
+        RCLCPP_WARN_THROTTLE(
+          this->get_logger(), *this->get_clock(), 5000,
+          "Velocity in frame '%s', expected '%s' or '%s' - sending the pose alone",
+          twist.header.frame_id.c_str(), base_link_frame_id_.c_str(), earth_frame_id_.c_str());
+      }
+    } else {
+      RCLCPP_WARN_THROTTLE(
+        this->get_logger(), *this->get_clock(), 5000,
+        "Velocity timestamp skewed by %" PRId64 " ms from the pose, sending the pose alone",
+        std::chrono::duration_cast<std::chrono::milliseconds>(skew).count());
+    }
+  }
+
   if (!pi_protocol_client_.sendExternalPose(
       *fc_time_us,
       static_cast<float>(ned.x()), static_cast<float>(ned.y()), static_cast<float>(ned.z()),
-      0.0f, 0.0f, 0.0f,
+      static_cast<float>(vel_ned.x()), static_cast<float>(vel_ned.y()),
+      static_cast<float>(vel_ned.z()),
       static_cast<float>(q_ned_frd.w()), static_cast<float>(q_ned_frd.x()),
       static_cast<float>(q_ned_frd.y()), static_cast<float>(q_ned_frd.z()),
-      EXT_POSE_USE_POS | EXT_POSE_USE_QUAT))
+      mode))
   {
     RCLCPP_WARN_THROTTLE(
       this->get_logger(), *this->get_clock(), 5000,
