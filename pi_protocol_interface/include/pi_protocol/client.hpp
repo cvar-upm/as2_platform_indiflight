@@ -128,6 +128,7 @@ class Client
 {
 public:
   using EkfInputsCallback = std::function<void (const pi_EKF_INPUTS_t &)>;
+  using MotorStateCallback = std::function<void (const pi_MOTOR_STATE_t &)>;
   using RcCallback = std::function<void (const pi_RC_t &)>;
   using StatusCallback = std::function<void (const pi_PI_STATUS_t &)>;
   using BatteryCallback = std::function<void (const pi_BATTERY_t &)>;
@@ -165,6 +166,21 @@ public:
   void setEkfInputsCallback(EkfInputsCallback callback)
   {
     ekf_inputs_callback_ = std::move(callback);
+  }
+
+  /**
+   * @brief Set the callback invoked for every successfully parsed MOTOR_STATE
+   * message: paired motor speed (rad/s) and commanded output fraction for up
+   * to 4 motors. Note the command in a given message corresponds to the omega
+   * value one control tick EARLIER, not the omega reported alongside it in the
+   * same message -- see the message's own comment in msgs/MOTOR_STATE.yaml.
+   * Must be set before connect() to reliably receive the first messages.
+   *
+   * @param callback Invoked with each parsed MOTOR_STATE message.
+   */
+  void setMotorStateCallback(MotorStateCallback callback)
+  {
+    motor_state_callback_ = std::move(callback);
   }
 
   /**
@@ -307,6 +323,7 @@ private:
   std::thread read_thread_;
   std::atomic<bool> running_{false};
   EkfInputsCallback ekf_inputs_callback_;
+  MotorStateCallback motor_state_callback_;
   RcCallback rc_callback_;
   StatusCallback status_callback_;
   BatteryCallback battery_callback_;

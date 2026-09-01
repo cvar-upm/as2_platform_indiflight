@@ -98,6 +98,8 @@ IndiflightPlatform::IndiflightPlatform(const rclcpp::NodeOptions & options)
   // emit one of these messages never triggers its callback.
   pi_protocol_client_.setEkfInputsCallback(
     [this](const pi_EKF_INPUTS_t & msg) {onPiProtocolEkfInputs(msg);});
+  pi_protocol_client_.setMotorStateCallback(
+    [this](const pi_MOTOR_STATE_t & msg) {onPiProtocolMotorState(msg);});
   pi_protocol_client_.setRcCallback(
     [this](const pi_RC_t & msg) {onPiRc(msg);});
   pi_protocol_client_.setStatusCallback(
@@ -230,6 +232,20 @@ void IndiflightPlatform::readParameters()
   max_yaw_rate_ = convert_deg_s_to_rad_s(max_yaw_rate_);
   min_yaw_rate_ = convert_deg_s_to_rad_s(min_yaw_rate_);
   computeControlSlopes();
+
+  const std::string command_send_mode_str = getParameter<std::string>("command_send_mode");
+  if (command_send_mode_str == "acro_setpoint") {
+    command_send_mode_ = CommandSendMode::ACRO_SETPOINT;
+  } else if (command_send_mode_str == "rc_override") {
+    command_send_mode_ = CommandSendMode::RC_OVERRIDE;
+  } else if (command_send_mode_str == "auto") {
+    command_send_mode_ = CommandSendMode::AUTO;
+  } else {
+    RCLCPP_ERROR(
+      this->get_logger(), "Unknown command_send_mode '%s', defaulting to auto",
+      command_send_mode_str.c_str());
+    command_send_mode_ = CommandSendMode::AUTO;
+  }
 
   use_thrust_map_ = getParameter<bool>("use_thrust_map");
   limit_output_ = getParameter<bool>("limit_output");
@@ -652,11 +668,20 @@ bool IndiflightPlatform::sendAcroSetpoint()
 
 bool IndiflightPlatform::sendBodyRatesCommand()
 {
-  // The pilot's switch picks the offboard language, and the two are exclusive
-  if (fc_pos_ctl_active_) {
-    return sendAcroSetpoint();
+  switch (command_send_mode_) {
+    case CommandSendMode::ACRO_SETPOINT:
+      return sendAcroSetpoint();
+    case CommandSendMode::RC_OVERRIDE:
+      return sendRcOverrideCommand();
+    case CommandSendMode::AUTO:
+    default:
+      // The pilot's switch picks the offboard language, and the two are exclusive
+      return fc_pos_ctl_active_ ? sendAcroSetpoint() : sendRcOverrideCommand();
   }
+}
 
+bool IndiflightPlatform::sendRcOverrideCommand()
+{
   double thrust = this->command_thrust_msg_.thrust;
   double roll = this->command_twist_msg_.twist.angular.x;
   double pitch = this->command_twist_msg_.twist.angular.y;
@@ -673,7 +698,7 @@ bool IndiflightPlatform::sendBodyRatesCommand()
   // convert to pulse width
   uint16_t roll_pulse = static_cast<uint16_t>(1500 + roll / roll_slope_);
   uint16_t pitch_pulse = static_cast<uint16_t>(1500 + pitch / pitch_slope_);
-  uint16_t yaw_pulse = static_cast<uint16_t>(1500 + yaw / roll_slope_);
+  uint16_t yaw_pulse = static_cast<uint16_t>(1500 + yaw / yaw_slope_);
   uint16_t throttle_pulse = 1000;
   if (use_thrust_map_) {
     throttle_pulse = thrust_map_.getThrottle_useconds(thrust, voltage_);
@@ -759,18 +784,33 @@ void IndiflightPlatform::onPiProtocolEkfInputs(const pi_EKF_INPUTS_t & msg)
   // FLU) before publishing, so base_link_frame_id_ actually matches its contents.
   rotateImuToDesiredFrame(angular_velocity, linear_acceleration);
   publishImuSample(stamp, msg.time_us, angular_velocity, linear_acceleration);
+  // Motor speed is no longer sourced from here -- see onPiProtocolMotorState().
+  // EKF_INPUTS capped at 6 motors, carried no commanded-output field, and its
+  // omega came from the same indiRun state MOTOR_STATE now carries directly.
+}
+
+void IndiflightPlatform::onPiProtocolMotorState(const pi_MOTOR_STATE_t & msg)
+{
+  // Betaflight mixer output order (quad X: [RR, FR, RL, FL]), not the
+  // indi_controller convention used elsewhere in the workspace.
+  //
+  // TIMING: velocity[i] and effort[i] are NOT computed from each other. u
+  // (effort) is the command indi.c computed from the PREVIOUS control tick's
+  // omega, before that tick's indiUpdateActuatorState() call overwrote omega
+  // with a fresh DSHOT-telemetry reading -- so effort[i] here corresponds to
+  // velocity[i] one control tick EARLIER, not the velocity[i] alongside it in
+  // this same message. See msgs/MOTOR_STATE.yaml for the full derivation.
+  const rclcpp::Time stamp = fcStamp(msg.time_us);
 
   sensor_msgs::msg::JointState motor_msg;
   motor_msg.header.stamp = stamp;
   motor_msg.header.frame_id = base_link_frame_id_;
-  // Betaflight mixer output order (quad X: [RR, FR, RL, FL], hex X adds
-  // [MR, ML]), not the indi_controller convention used elsewhere in the
-  // workspace. Plain rad/s, unlike x/y/z/p/q/r above.
-  const std::array<uint16_t, 6> omegas = {
-    msg.omega1, msg.omega2, msg.omega3, msg.omega4, msg.omega5, msg.omega6};
+  const std::array<uint16_t, 4> omegas = {msg.omega1, msg.omega2, msg.omega3, msg.omega4};
+  const std::array<int16_t, 4> us = {msg.u1, msg.u2, msg.u3, msg.u4};
   for (int i = 0; i < num_rotors_; i++) {
     motor_msg.name.emplace_back("motor" + std::to_string(i));
     motor_msg.velocity.emplace_back(static_cast<double>(omegas[i]));
+    motor_msg.effort.emplace_back(static_cast<double>(us[i]) / 32767.0);
   }
   // sensor_measurements/motor_angular_speed (as2::sensors::Sensor)
   motor_sensor_ptr_->updateData(motor_msg);

@@ -228,6 +228,9 @@ void Client::readLoop()
         case PI_MSG_EKF_INPUTS_ID:
           deliver(piMsgEkfInputsRx, ekf_inputs_callback_);
           break;
+        case PI_MSG_MOTOR_STATE_ID:
+          deliver(piMsgMotorStateRx, motor_state_callback_);
+          break;
         case PI_MSG_RC_ID:
           deliver(piMsgRcRx, rc_callback_);
           break;

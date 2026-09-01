@@ -111,6 +111,19 @@ class IndiflightPlatform : public as2::AerialPlatform
 {
 public:
   /**
+   * @brief Which wire format sendBodyRatesCommand() sends, independent of
+   * whether the FC's BOXPOSCTL switch is actually engaged - that switch still
+   * governs whether the FC acts on an ACRO_SETPOINT message, this only
+   * controls what the node transmits.
+   */
+  enum class CommandSendMode
+  {
+    AUTO,          ///< Dispatch on the FC's reported POS_CTL_ACTIVE flag (default).
+    ACRO_SETPOINT, ///< Always send SETPOINT/ACRO (rad/s + N/kg), regardless of FC state.
+    RC_OVERRIDE    ///< Always send the legacy RC_OVERRIDE pulse encoding.
+  };
+
+  /**
    * @brief Construct the Indiflight platform, opening the pi-protocol link.
    *
    * @param options Node options.
@@ -180,17 +193,27 @@ private:
   void initChannels();
 
   /**
-   * @brief Publish an EKF_INPUTS message as sensor_measurements/imu and
-   * sensor_measurements/motor_angular_speed.
+   * @brief Publish an EKF_INPUTS message as sensor_measurements/imu.
    *
-   * Decodes the fixed-point accel/gyro (EKF_INPUTS.yaml scales) and the motor
-   * speeds, rotates the IMU into the body frame and stamps both topics with
-   * the same FC instant - the message carries one synchronized sample of
-   * everything.
+   * Decodes the fixed-point accel/gyro (EKF_INPUTS.yaml scales) and rotates
+   * the IMU into the body frame. Motor speed is no longer sourced from this
+   * message - see onPiProtocolMotorState().
    *
    * @param msg Received EKF_INPUTS message.
    */
   void onPiProtocolEkfInputs(const pi_EKF_INPUTS_t & msg);
+
+  /**
+   * @brief Publish a MOTOR_STATE message as sensor_measurements/motor_angular_speed
+   * (velocity: rad/s, effort: commanded output fraction on [0,1]).
+   *
+   * The command in a given message corresponds to the omega value one control
+   * tick EARLIER, not the omega reported alongside it - see the message's own
+   * comment in msgs/MOTOR_STATE.yaml for the derivation.
+   *
+   * @param msg Received MOTOR_STATE message.
+   */
+  void onPiProtocolMotorState(const pi_MOTOR_STATE_t & msg);
 
   /**
    * @brief Ask the FC to echo a TIMESYNC exchange back, and time it.
@@ -277,13 +300,21 @@ private:
   void updatePlatformState(bool armed, bool offboard);
 
   /**
+   * @brief Dispatch the BODY_RATES references to sendAcroSetpoint() or
+   * sendRcOverrideCommand() according to command_send_mode_.
+   *
+   * @return true if the underlying send succeeded.
+   */
+  bool sendBodyRatesCommand();
+
+  /**
    * @brief Send the BODY_RATES references (command_twist_msg_ body rates and
    * command_thrust_msg_) as RC_OVERRIDE stick pulses, saturated and mapped
    * through the rate limits and the thrust map.
    *
    * @return true if the RC_OVERRIDE message was written to the FC.
    */
-  bool sendBodyRatesCommand();
+  bool sendRcOverrideCommand();
 
   /**
    * @brief The commanded thrust as a specific force in the FC's FRD body frame.
@@ -477,6 +508,8 @@ private:
   // Airframe mass, kg. Turns the commanded thrust into the specific force that
   // SETPOINT carries, since neither the message nor the FC knows the mass
   double mass_;
+
+  CommandSendMode command_send_mode_ = CommandSendMode::AUTO;
 
   // BODY_RATES command mapping, from rate and thrust references to RC_OVERRIDE pulses
   double max_thrust_;
