@@ -418,7 +418,12 @@ private:
   void onExternalPose(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
 
   /**
-   * @brief Subscription callback for the topic twist source
+   * @brief Subscription callback for the twist source: pair it with the pose of its
+   * own instant and forward both.
+   *
+   * The pose comes from TF at the twist's stamp, the way the behaviors and the other
+   * platforms build a state, so the two halves cannot describe different instants
+   * whichever callback the executor happens to serve first.
    *
    * @param msg Twist received on external_pose.twist_topic
    */
@@ -443,8 +448,12 @@ private:
    * flying BODY_RATES is what makes a later switch to POSITION immediate.
    *
    * @param pose Pose already expressed in earth_frame_id_.
+   * @param twist Velocity of the same instant, already in the earth or base frame.
+   * Absent leaves the FC to infer one from the positions it receives.
    */
-  void sendExternalPose(const geometry_msgs::msg::PoseStamped & pose);
+  void sendExternalPose(
+    const geometry_msgs::msg::PoseStamped & pose,
+    const std::optional<geometry_msgs::msg::TwistStamped> & twist = std::nullopt);
 
   /**
    * @brief Publish the last commanded RC channels on debug/rc/command.
@@ -523,7 +532,6 @@ private:
   // Velocity to send alongside the pose. Empty leaves the FC to infer it from
   // the position it receives.
   std::string external_pose_twist_topic_;
-  std::optional<geometry_msgs::msg::TwistStamped> last_external_twist_;
   // Stamp of the last pose forwarded to the FC, to skip unchanged ones.
   // Nanoseconds rather than rclcpp::Time, whose comparison throws when the two
   // operands carry different clock types. The optional distinguishes "nothing

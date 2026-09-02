@@ -135,6 +135,15 @@ IndiflightPlatform::IndiflightPlatform(const rclcpp::NodeOptions & options)
       RCLCPP_INFO(
         this->get_logger(), "Forwarding '%s' to the FC EKF as EXTERNAL_POSE",
         external_pose_pose_topic_.c_str());
+    } else if (!external_pose_twist_topic_.empty()) {
+      external_twist_sub_ = this->create_subscription<geometry_msgs::msg::TwistStamped>(
+        external_pose_twist_topic_, rclcpp::SensorDataQoS(),
+        std::bind(&IndiflightPlatform::onExternalTwist, this, std::placeholders::_1));
+      RCLCPP_INFO(
+        this->get_logger(),
+        "Forwarding '%s' and the %s->%s TF of its instant to the FC EKF as EXTERNAL_POSE",
+        external_pose_twist_topic_.c_str(), earth_frame_id_.c_str(),
+        base_link_frame_id_.c_str());
     } else {
       external_pose_timer_ = this->create_wall_timer(
         std::chrono::duration<double>(1.0 / external_pose_rate_),
@@ -142,14 +151,6 @@ IndiflightPlatform::IndiflightPlatform(const rclcpp::NodeOptions & options)
       RCLCPP_INFO(
         this->get_logger(), "Forwarding %s->%s TF to the FC EKF as EXTERNAL_POSE at %.1f Hz",
         earth_frame_id_.c_str(), base_link_frame_id_.c_str(), external_pose_rate_);
-    }
-    if (!external_pose_twist_topic_.empty()) {
-      external_twist_sub_ = this->create_subscription<geometry_msgs::msg::TwistStamped>(
-        external_pose_twist_topic_, rclcpp::SensorDataQoS(),
-        std::bind(&IndiflightPlatform::onExternalTwist, this, std::placeholders::_1));
-      RCLCPP_INFO(
-        this->get_logger(), "Forwarding '%s' to the FC EKF as EXTERNAL_VELOCITY",
-        external_pose_twist_topic_.c_str());
     }
   }
 
@@ -282,11 +283,13 @@ void IndiflightPlatform::readParameters()
         this->get_logger(),
         "external_pose pose_topic and mocap_topic are mutually exclusive");
     }
-    if (!external_pose_twist_topic_.empty() && external_pose_pose_topic_.empty()) {
+    if (!external_pose_twist_topic_.empty() &&
+      (!external_pose_pose_topic_.empty() || !external_pose_mocap_topic_.empty()))
+    {
       RCLCPP_FATAL(
         this->get_logger(),
-        "external_pose.twist_topic needs pose_topic: the mocap and TF sources carry no "
-        "pose the twist is stamped with");
+        "external_pose.twist_topic is a source of its own, bringing the pose of the "
+        "twist's instant from TF, so it excludes pose_topic and mocap_topic");
       external_pose_twist_topic_.clear();
     }
     if (external_pose_mocap_topic_.empty() && external_pose_pose_topic_.empty() &&
@@ -944,10 +947,21 @@ void IndiflightPlatform::onExternalRigidBodies(
 
 void IndiflightPlatform::onExternalTwist(const geometry_msgs::msg::TwistStamped::SharedPtr msg)
 {
-  last_external_twist_ = *msg;
+  try {
+    const auto [pose, twist] = tf_handler_->getState(
+      *msg, earth_frame_id_, earth_frame_id_, base_link_frame_id_);
+    sendExternalPose(pose, twist);
+  } catch (const tf2::TransformException & e) {
+    RCLCPP_WARN_THROTTLE(
+      this->get_logger(), *this->get_clock(), 5000,
+      "No %s->%s transform at the velocity's instant: %s",
+      earth_frame_id_.c_str(), base_link_frame_id_.c_str(), e.what());
+  }
 }
 
-void IndiflightPlatform::sendExternalPose(const geometry_msgs::msg::PoseStamped & pose)
+void IndiflightPlatform::sendExternalPose(
+  const geometry_msgs::msg::PoseStamped & pose,
+  const std::optional<geometry_msgs::msg::TwistStamped> & twist)
 {
   // Skip a pose already forwarded: the TF poll runs faster than the estimator
   // publishes. Re-sending one under a fresh FC timestamp would make the FC
@@ -982,29 +996,29 @@ void IndiflightPlatform::sendExternalPose(const geometry_msgs::msg::PoseStamped 
   // Compute the velocity
   Eigen::Vector3d vel_ned = Eigen::Vector3d::Zero();
   uint8_t mode = EXT_POSE_USE_POS | EXT_POSE_USE_QUAT;
-  if (last_external_twist_) {
+  if (twist) {
     // Check if twist is synchronized with the pose
-    const geometry_msgs::msg::TwistStamped & twist = *last_external_twist_;
-    const int64_t twist_ns = rclcpp::Time(twist.header.stamp).nanoseconds();
+    const int64_t twist_ns = rclcpp::Time(twist->header.stamp).nanoseconds();
     const auto skew = std::chrono::nanoseconds(twist_ns - stamp_ns);
 
     if (std::chrono::abs(skew) < std::chrono::milliseconds(1)) {
       // Convert to desired frame
-      Eigen::Vector3d linear(twist.twist.linear.x, twist.twist.linear.y, twist.twist.linear.z);
-      if (twist.header.frame_id == base_link_frame_id_) {
+      Eigen::Vector3d linear(
+        twist->twist.linear.x, twist->twist.linear.y, twist->twist.linear.z);
+      if (twist->header.frame_id == base_link_frame_id_) {
         const Eigen::Quaterniond q_enu_flu(
           pose.pose.orientation.w, pose.pose.orientation.x,
           pose.pose.orientation.y, pose.pose.orientation.z);
         vel_ned = enuToNed(q_enu_flu * linear);
         mode |= EXT_POSE_USE_VEL;
-      } else if (twist.header.frame_id == earth_frame_id_) {
+      } else if (twist->header.frame_id == earth_frame_id_) {
         vel_ned = enuToNed(linear);
         mode |= EXT_POSE_USE_VEL;
       } else {
         RCLCPP_WARN_THROTTLE(
           this->get_logger(), *this->get_clock(), 5000,
           "Velocity in frame '%s', expected '%s' or '%s' - sending the pose alone",
-          twist.header.frame_id.c_str(), base_link_frame_id_.c_str(), earth_frame_id_.c_str());
+          twist->header.frame_id.c_str(), base_link_frame_id_.c_str(), earth_frame_id_.c_str());
       }
     } else {
       RCLCPP_WARN_THROTTLE(
