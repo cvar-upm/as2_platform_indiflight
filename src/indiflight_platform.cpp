@@ -653,6 +653,12 @@ bool IndiflightPlatform::sendAcroSetpoint()
       command_twist_msg_.twist.angular.z));
   const Eigen::Vector3d spf = specificForceFrd();
 
+  // TEMPORARY DEBUG -- remove once the zero-thrust-reaching-the-FC issue is resolved.
+  RCLCPP_INFO_THROTTLE(
+    this->get_logger(), *this->get_clock(), 500,
+    "ACRO SETPOINT: raw thrust=%.3f mass=%.3f -> rates=[%.3f, %.3f, %.3f] spf=[%.3f, %.3f, %.3f]",
+    command_thrust_msg_.thrust, mass_, rates.x(), rates.y(), rates.z(), spf.x(), spf.y(), spf.z());
+
   if (!pi_protocol_client_.sendSetpoint(
       static_cast<float>(rates.x()), static_cast<float>(rates.y()),
       static_cast<float>(rates.z()), static_cast<float>(spf.x()),
