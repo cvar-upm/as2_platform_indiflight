@@ -584,6 +584,14 @@ private:
   rclcpp::TimerBase::SharedPtr timesync_timer_;
   bool timesync_locked_ = false;
 
+  // TEMPORARY DEBUG -- prints ownSendCommand()'s own gate conditions directly
+  // (isControlModeSettled/getConnectedStatus/getArmingState/getOffboardMode/
+  // has_new_references_), independent of as2_core's own RCLCPP_DEBUG_THROTTLE
+  // calls and whatever logger severity threshold is actually in effect.
+  // Remove once the "sendAcroSetpoint never fires" issue is resolved.
+  rclcpp::TimerBase::SharedPtr send_gate_debug_timer_;
+  void printSendCommandGateState();
+
   // Debug publishers
   std::string debug_rc_command_topic_;
   std::string debug_og_timestamp_topic_;

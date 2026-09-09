@@ -159,6 +159,11 @@ IndiflightPlatform::IndiflightPlatform(const rclcpp::NodeOptions & options)
     std::chrono::seconds(1), std::bind(&IndiflightPlatform::requestTimesync, this));
   requestTimesync();
 
+  // TEMPORARY DEBUG -- see header comment.
+  send_gate_debug_timer_ = this->create_wall_timer(
+    std::chrono::milliseconds(500),
+    std::bind(&IndiflightPlatform::printSendCommandGateState, this));
+
   // Clear layout dimensions if they were set in a previous publication
   debug_rc_command_.layout.dim.clear();
 
@@ -643,6 +648,22 @@ bool IndiflightPlatform::sendAttitudeCommand()
     return false;
   }
   return true;
+}
+
+// TEMPORARY DEBUG -- see header comment. Prints the exact same four
+// preconditions as2_core's AerialPlatform checks before ever calling
+// ownSendCommand() (and hence sendBodyRatesCommand()/sendAcroSetpoint()),
+// plus has_new_references_ which gates it one level further inside that
+// same check. All of RCLCPP_INFO, not DEBUG, specifically so it doesn't
+// depend on any logger-severity configuration actually taking effect.
+void IndiflightPlatform::printSendCommandGateState()
+{
+  RCLCPP_INFO(
+    this->get_logger(),
+    "send-gate: control_mode_settled=%d connected=%d armed=%d offboard=%d "
+    "has_new_references=%d",
+    isControlModeSettled(), getConnectedStatus(), getArmingState(), getOffboardMode(),
+    has_new_references_);
 }
 
 bool IndiflightPlatform::sendAcroSetpoint()
