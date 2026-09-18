@@ -1072,7 +1072,21 @@ void IndiflightPlatform::onPiStatus(const pi_PI_STATUS_t & msg)
 
 void IndiflightPlatform::requestTimesync()
 {
-  pi_protocol_client_.sendTimesyncRequest(this->get_clock()->now().nanoseconds());
+  // Debug: sendTimesyncRequest()'s bool return (== the underlying write()
+  // succeeding) used to be discarded here, so a failed uplink write was
+  // completely silent -- no warning, no retry, and nothing to distinguish
+  // "the FC never got the request" from "it got it and never replied" from
+  // the platform's own logs. If this fires, the write() to the pi-protocol
+  // device itself is failing (fd, permissions, kernel TX buffer) -- if it
+  // never fires but timesync_locked_ still never becomes true, the write is
+  // succeeding and the problem is downstream of this process (the wire, or
+  // the FC not receiving/answering).
+  if (!pi_protocol_client_.sendTimesyncRequest(this->get_clock()->now().nanoseconds())) {
+    RCLCPP_WARN_THROTTLE(
+      this->get_logger(), *this->get_clock(), 5000,
+      "TIMESYNC request write() failed on %s -- the FC cannot be receiving it either",
+      pi_protocol_device_.c_str());
+  }
 }
 
 void IndiflightPlatform::onPiTimesync(const pi_TIMESYNC_t & msg)
