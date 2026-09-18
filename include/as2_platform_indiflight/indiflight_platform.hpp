@@ -333,6 +333,16 @@ private:
   void checkLink();
 
   /**
+   * @brief Debug: warn if external_pose is enabled on the mocap_topic source
+   * but no mocap4r2_msgs/RigidBodies message has arrived recently -- distinct
+   * from onExternalRigidBodies()'s "topic is alive but body name not found"
+   * warning, this catches the topic never publishing at all (mocap system
+   * off/disconnected), which otherwise looks identical to a silent
+   * sendExternalPose() from the outside.
+   */
+  void checkMocapLink();
+
+  /**
    * @brief Latch the current pose as the hover reference, so that a switch to
    * HOVER holds where the vehicle is rather than wherever it was last told to
    * go, and works coming from BODY_RATES too, where the FC has no setpoint at all.
@@ -528,6 +538,13 @@ private:
   rclcpp::TimerBase::SharedPtr external_pose_timer_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr external_pose_sub_;
   rclcpp::Subscription<mocap4r2_msgs::msg::RigidBodies>::SharedPtr external_rigid_bodies_sub_;
+  // Debug: watchdog over the mocap_topic source specifically (see
+  // checkMocapLink()). Arrival time of the last RigidBodies message,
+  // regardless of whether it contained rigid_body_name_ -- set unconditionally
+  // at the top of onExternalRigidBodies(), unlike last_external_pose_stamp_ns_
+  // above which only advances past a successful send.
+  std::optional<rclcpp::Time> last_mocap_msg_time_;
+  rclcpp::TimerBase::SharedPtr mocap_link_check_timer_;
 
   // Platform state, mirrored from the FC
   bool external_odom_ = true;

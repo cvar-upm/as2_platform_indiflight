@@ -128,6 +128,12 @@ IndiflightPlatform::IndiflightPlatform(const rclcpp::NodeOptions & options)
       RCLCPP_INFO(
         this->get_logger(), "Forwarding '%s' body '%s' to the FC EKF as EXTERNAL_POSE",
         external_pose_mocap_topic_.c_str(), external_pose_rigid_body_name_.c_str());
+      // Debug: catch the topic never publishing at all, not just the
+      // configured body being absent from it (onExternalRigidBodies() below
+      // already warns about that case). 2s: a couple of missed mocap frames
+      // at any realistic rate shouldn't trip this, a dead topic should.
+      mocap_link_check_timer_ = this->create_wall_timer(
+        std::chrono::seconds(2), std::bind(&IndiflightPlatform::checkMocapLink, this));
     } else if (!external_pose_pose_topic_.empty()) {
       external_pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
         external_pose_pose_topic_, rclcpp::SensorDataQoS(),
@@ -899,6 +905,11 @@ void IndiflightPlatform::onExternalPose(const geometry_msgs::msg::PoseStamped::S
 void IndiflightPlatform::onExternalRigidBodies(
   const mocap4r2_msgs::msg::RigidBodies::SharedPtr msg)
 {
+  // Debug: mark that the topic is alive, unconditionally -- checkMocapLink()
+  // watches this to tell "mocap system off/topic dead" apart from "topic is
+  // fine but rigid_body_name_ isn't in it" (the warning a few lines below).
+  last_mocap_msg_time_ = this->get_clock()->now();
+
   for (const auto & body : msg->rigidbodies) {
     if (body.rigid_body_name != external_pose_rigid_body_name_) {
       continue;
@@ -926,6 +937,16 @@ void IndiflightPlatform::onExternalRigidBodies(
 
 void IndiflightPlatform::sendExternalPose(const geometry_msgs::msg::PoseStamped & pose)
 {
+  // Debug: confirm this function is actually being reached at all (i.e. the
+  // mocap/pose_topic subscription is delivering something) before any of the
+  // skip/failure returns below can hide that. Throttled -- this fires at the
+  // pose source's raw rate (e.g. mocap Hz), not the actually-sent rate.
+  RCLCPP_INFO_THROTTLE(
+    this->get_logger(), *this->get_clock(), 2000,
+    "sendExternalPose() called: frame='%s' ENU pos=(%.3f, %.3f, %.3f)",
+    pose.header.frame_id.c_str(),
+    pose.pose.position.x, pose.pose.position.y, pose.pose.position.z);
+
   // Skip a pose already forwarded: the TF poll runs faster than the estimator
   // publishes. Re-sending one under a fresh FC timestamp would make the FC
   // read a stale measurement as current.
@@ -981,6 +1002,14 @@ void IndiflightPlatform::sendExternalPose(const geometry_msgs::msg::PoseStamped 
       "EXTERNAL_POSE does not advance the FC tick (%" PRIu64 " dropped): the FC EKF is "
       "not being corrected", skipped);
   }
+
+  // Debug: the pose as actually written to the wire (NED position, NED/FRD
+  // quaternion) -- confirms not just that something was sent, but what.
+  RCLCPP_INFO_THROTTLE(
+    this->get_logger(), *this->get_clock(), 2000,
+    "EXTERNAL_POSE sent: fc_time_us=%u NED pos=(%.3f, %.3f, %.3f) quat(w,x,y,z)=(%.3f, %.3f, %.3f, %.3f)",
+    *fc_time_us, ned.x(), ned.y(), ned.z(),
+    q_ned_frd.w(), q_ned_frd.x(), q_ned_frd.y(), q_ned_frd.z());
 
   last_external_pose_stamp_ns_ = stamp_ns;
 }
@@ -1098,6 +1127,29 @@ void IndiflightPlatform::checkLink()
       " rejected by the stamp gate). The link carries data that does not parse: the firmware "
       "is most likely built against a different pi-protocol message table, or a different "
       "baudrate.");
+}
+
+void IndiflightPlatform::checkMocapLink()
+{
+  constexpr double kStaleAfterSec = 2.0;  // matches this timer's own period
+
+  if (!last_mocap_msg_time_) {
+    RCLCPP_WARN(
+      this->get_logger(),
+      "external_pose is enabled on mocap_topic '%s', but no RigidBodies message has been "
+      "received since startup. Is the mocap system running and publishing this topic?",
+      external_pose_mocap_topic_.c_str());
+    return;
+  }
+
+  const double age_sec = (this->get_clock()->now() - *last_mocap_msg_time_).seconds();
+  if (age_sec > kStaleAfterSec) {
+    RCLCPP_WARN(
+      this->get_logger(),
+      "external_pose is enabled on mocap_topic '%s', but no RigidBodies message has arrived "
+      "in %.1fs. The FC EKF is not being corrected.",
+      external_pose_mocap_topic_.c_str(), age_sec);
+  }
 }
 
 void IndiflightPlatform::publishDebugRc()
