@@ -205,8 +205,8 @@ FC EKF. `debug/aux` publishes the raw channel values if you need to see what the
 2. In the FC blackbox/OSD, verify `posEstNed` follows the real vehicle with the correct sign on
    all three axes and that the estimated heading matches reality (North = +x NED).
 3. Compare the emitted `POS_SETPOINT` against the mocap pose: same axes, same signs, same datum.
-4. Flip BOXPOSCTL and verify the FC EKF converges (~2 s) and `POSITION_MODE` engages.
-5. With ARM + BOXPOSCTL up, confirm the platform agrees: `ros2 topic echo
+4. Flip BOXOFFBOARDCTL and verify the FC EKF converges (~2 s) and `POSITION_MODE` engages.
+5. With ARM + BOXOFFBOARDCTL up, confirm the platform agrees: `ros2 topic echo
    /drone0/platform/info` must show `armed: true, offboard: true`, and the FC must be
    receiving setpoints (blackbox `posSpNed`, or the parse-error count staying flat).
 

@@ -703,7 +703,7 @@ bool IndiflightPlatform::sendBodyRatesCommand()
     case CommandSendMode::AUTO:
     default:
       // The pilot's switch picks the offboard language, and the two are exclusive
-      return fc_pos_ctl_active_ ? sendAcroSetpoint() : sendRcOverrideCommand();
+      return fc_offboard_ctl_active_ ? sendAcroSetpoint() : sendRcOverrideCommand();
   }
 }
 
@@ -1079,16 +1079,16 @@ void IndiflightPlatform::onPiStatus(const pi_PI_STATUS_t & msg)
   constexpr uint8_t kFlagPiOverrideActive = 1 << 1;
   constexpr uint8_t kFlagRxLinkValid = 1 << 2;
   constexpr uint8_t kFlagEkfConverged = 1 << 3;
-  constexpr uint8_t kFlagPosCtlActive = 1 << 4;
+  constexpr uint8_t kFlagOffboardCtlActive = 1 << 4;
 
   const bool armed = msg.flags & kFlagArmed;
   const bool override_active = msg.flags & kFlagPiOverrideActive;
   const bool rx_link_valid = msg.flags & kFlagRxLinkValid;
   fc_ekf_converged_ = msg.flags & kFlagEkfConverged;
-  fc_pos_ctl_active_ = msg.flags & kFlagPosCtlActive;
+  fc_offboard_ctl_active_ = msg.flags & kFlagOffboardCtlActive;
 
-  // POS_CTL is the offboard family, PI OVERRIDE the manual one
-  updatePlatformState(armed, override_active || fc_pos_ctl_active_);
+  // OFFBOARD_CTL is the offboard family, PI OVERRIDE the manual one
+  updatePlatformState(armed, override_active || fc_offboard_ctl_active_);
 
   // Debug
   if (!debug_pi_status_pub_) {
@@ -1099,11 +1099,11 @@ void IndiflightPlatform::onPiStatus(const pi_PI_STATUS_t & msg)
   debug_msg.layout.dim.resize(1);
   debug_msg.layout.dim[0].size = 5;
   debug_msg.layout.dim[0].label =
-    "armed,pi_override_active,rx_link_valid,ekf_converged,pos_ctl_active";
+    "armed,pi_override_active,rx_link_valid,ekf_converged,offboard_ctl_active";
   debug_msg.data = {
     static_cast<uint16_t>(armed), static_cast<uint16_t>(override_active),
     static_cast<uint16_t>(rx_link_valid), static_cast<uint16_t>(fc_ekf_converged_),
-    static_cast<uint16_t>(fc_pos_ctl_active_)};
+    static_cast<uint16_t>(fc_offboard_ctl_active_)};
   debug_msg.stamp = fcStamp(msg.time_us);
   debug_pi_status_pub_->publish(debug_msg);
 }

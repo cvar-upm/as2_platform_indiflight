@@ -44,9 +44,9 @@
       max : 360.0  # Max yaw rate to send to platform (deg/s) # ATTENTION: this is in deg/s
       min : -360.0  # Min yaw rate to send to platform (deg/s) # ATTENTION: this is in deg/s
     command_send_mode: "auto"  # "auto" | "acro_setpoint" | "rc_override" -- which wire format
-      # sendBodyRatesCommand() sends. auto: dispatch on the FC's reported POS_CTL_ACTIVE flag
+      # sendBodyRatesCommand() sends. auto: dispatch on the FC's reported OFFBOARD_CTL_ACTIVE flag
       # (default, unchanged behavior). acro_setpoint: always send SETPOINT/ACRO (rad/s + N/kg),
-      # regardless of what the FC reports -- the FC only acts on it while BOXPOSCTL is engaged,
+      # regardless of what the FC reports -- the FC only acts on it while BOXOFFBOARDCTL is engaged,
       # this only controls what the NODE sends, not whether the FC listens. rc_override: always
       # send the legacy RC_OVERRIDE pulse encoding.
     use_thrust_map: false # Flag to use lineal approximation (default) or polynomial thrust map

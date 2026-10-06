@@ -112,13 +112,13 @@ class IndiflightPlatform : public as2::AerialPlatform
 public:
   /**
    * @brief Which wire format sendBodyRatesCommand() sends, independent of
-   * whether the FC's BOXPOSCTL switch is actually engaged - that switch still
+   * whether the FC's BOXOFFBOARDCTL switch is actually engaged - that switch still
    * governs whether the FC acts on an ACRO_SETPOINT message, this only
    * controls what the node transmits.
    */
   enum class CommandSendMode
   {
-    AUTO,          ///< Dispatch on the FC's reported POS_CTL_ACTIVE flag (default).
+    AUTO,          ///< Dispatch on the FC's reported OFFBOARD_CTL_ACTIVE flag (default).
     ACRO_SETPOINT, ///< Always send SETPOINT/ACRO (rad/s + N/kg), regardless of FC state.
     RC_OVERRIDE    ///< Always send the legacy RC_OVERRIDE pulse encoding.
   };
@@ -555,7 +555,7 @@ private:
   uint64_t ext_pose_skipped_seen_ = 0;
   // FC state from PI_STATUS, which the control modes are gated on.
   bool fc_ekf_converged_ = false;
-  bool fc_pos_ctl_active_ = false;
+  bool fc_offboard_ctl_active_ = false;
   std::shared_ptr<as2::tf::TfHandler> tf_handler_;
   // Exactly one of these is created, per the source parameters above.
   rclcpp::TimerBase::SharedPtr external_pose_timer_;
