@@ -68,7 +68,7 @@ IndiflightPlatform::IndiflightPlatform(const rclcpp::NodeOptions & options)
   readParameters();
   configureSensors();
   initChannels();
-  tf_handler_ = std::make_shared<as2::tf::TfHandler>(this);
+
   if (use_thrust_map_) {
     thrust_map_.initialize(this);
   } else {
