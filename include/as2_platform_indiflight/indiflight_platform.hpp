@@ -83,6 +83,7 @@
 #define SETPOINT_TRAJECTORY 2
 #define SETPOINT_ATTITUDE   3
 #define SETPOINT_ACRO       4
+#define SETPOINT_HOLD       5
 #define SETPOINT_YAW_RATE   (1 << 3)
 
 namespace as2_platform_indiflight
@@ -176,7 +177,8 @@ public:
    */
   void ownKillSwitch() override;
   /**
-   * @brief Hold the vehicle in place with a zero setpoint.
+   * @brief Latch the FC into emergency hover: it brakes, holds position and
+   * ignores this node until disarmed.
    */
   void ownStopPlatform() override;
 
@@ -556,7 +558,7 @@ private:
   // FC state from PI_STATUS, which the control modes are gated on.
   bool fc_ekf_converged_ = false;
   bool fc_offboard_ctl_active_ = false;
-  std::shared_ptr<as2::tf::TfHandler> tf_handler_;
+  bool fc_emerg_hover_ = false;
   // Exactly one of these is created, per the source parameters above.
   rclcpp::TimerBase::SharedPtr external_pose_timer_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr external_pose_sub_;

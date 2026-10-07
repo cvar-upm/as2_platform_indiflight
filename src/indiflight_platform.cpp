@@ -68,6 +68,7 @@ IndiflightPlatform::IndiflightPlatform(const rclcpp::NodeOptions & options)
   readParameters();
   configureSensors();
   initChannels();
+
   if (use_thrust_map_) {
     thrust_map_.initialize(this);
   } else {
@@ -776,9 +777,13 @@ void IndiflightPlatform::ownKillSwitch()
 
 void IndiflightPlatform::ownStopPlatform()
 {
-  RCLCPP_ERROR(
-    this->get_logger(),
-    "Stop is physical-radio-only on this platform - AS2 cannot stop it from here.");
+  if (!pi_protocol_client_.sendSetpoint(
+      0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, SETPOINT_HOLD))
+  {
+    RCLCPP_ERROR_THROTTLE(
+      this->get_logger(), *this->get_clock(), 1000,
+      "Could not send emergency HOLD to the flight controller");
+  }
 }
 
 void IndiflightPlatform::rotateImuToDesiredFrame(
@@ -1080,15 +1085,24 @@ void IndiflightPlatform::onPiStatus(const pi_PI_STATUS_t & msg)
   constexpr uint8_t kFlagRxLinkValid = 1 << 2;
   constexpr uint8_t kFlagEkfConverged = 1 << 3;
   constexpr uint8_t kFlagOffboardCtlActive = 1 << 4;
+  constexpr uint8_t kFlagEmergHover = 1 << 5;
 
   const bool armed = msg.flags & kFlagArmed;
   const bool override_active = msg.flags & kFlagPiOverrideActive;
   const bool rx_link_valid = msg.flags & kFlagRxLinkValid;
+  const bool emerg_hover = msg.flags & kFlagEmergHover;
   fc_ekf_converged_ = msg.flags & kFlagEkfConverged;
   fc_offboard_ctl_active_ = msg.flags & kFlagOffboardCtlActive;
 
   // OFFBOARD_CTL is the offboard family, PI OVERRIDE the manual one
   updatePlatformState(armed, override_active || fc_offboard_ctl_active_);
+
+  if (emerg_hover && !fc_emerg_hover_) {
+    RCLCPP_ERROR(
+      this->get_logger(), "FC in emergency hover: platform commands ignored until disarm");
+    handleStateMachineEvent(as2_msgs::msg::PlatformStateMachineEvent::EMERGENCY);
+  }
+  fc_emerg_hover_ = emerg_hover;
 
   // Debug
   if (!debug_pi_status_pub_) {
@@ -1097,13 +1111,13 @@ void IndiflightPlatform::onPiStatus(const pi_PI_STATUS_t & msg)
 
   as2_msgs::msg::UInt16MultiArrayStamped debug_msg;
   debug_msg.layout.dim.resize(1);
-  debug_msg.layout.dim[0].size = 5;
+  debug_msg.layout.dim[0].size = 6;
   debug_msg.layout.dim[0].label =
-    "armed,pi_override_active,rx_link_valid,ekf_converged,offboard_ctl_active";
+    "armed,pi_override_active,rx_link_valid,ekf_converged,offboard_ctl_active,emerg_hover";
   debug_msg.data = {
     static_cast<uint16_t>(armed), static_cast<uint16_t>(override_active),
     static_cast<uint16_t>(rx_link_valid), static_cast<uint16_t>(fc_ekf_converged_),
-    static_cast<uint16_t>(fc_offboard_ctl_active_)};
+    static_cast<uint16_t>(fc_offboard_ctl_active_), static_cast<uint16_t>(emerg_hover)};
   debug_msg.stamp = fcStamp(msg.time_us);
   debug_pi_status_pub_->publish(debug_msg);
 }
