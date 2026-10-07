@@ -99,8 +99,6 @@ IndiflightPlatform::IndiflightPlatform(const rclcpp::NodeOptions & options)
   // emit one of these messages never triggers its callback.
   pi_protocol_client_.setEkfInputsCallback(
     [this](const pi_EKF_INPUTS_t & msg) {onPiProtocolEkfInputs(msg);});
-  pi_protocol_client_.setMotorStateCallback(
-    [this](const pi_MOTOR_STATE_t & msg) {onPiProtocolMotorState(msg);});
   pi_protocol_client_.setRcCallback(
     [this](const pi_RC_t & msg) {onPiRc(msg);});
   pi_protocol_client_.setStatusCallback(
@@ -816,33 +814,18 @@ void IndiflightPlatform::onPiProtocolEkfInputs(const pi_EKF_INPUTS_t & msg)
   // FLU) before publishing, so base_link_frame_id_ actually matches its contents.
   rotateImuToDesiredFrame(angular_velocity, linear_acceleration);
   publishImuSample(stamp, msg.time_us, angular_velocity, linear_acceleration);
-  // Motor speed is no longer sourced from here -- see onPiProtocolMotorState().
-  // EKF_INPUTS capped at 6 motors, carried no commanded-output field, and its
-  // omega came from the same indiRun state MOTOR_STATE now carries directly.
-}
 
-void IndiflightPlatform::onPiProtocolMotorState(const pi_MOTOR_STATE_t & msg)
-{
   // Betaflight mixer output order (quad X: [RR, FR, RL, FL]), not the
-  // indi_controller convention used elsewhere in the workspace.
-  //
-  // TIMING: velocity[i] and effort[i] are NOT computed from each other. u
-  // (effort) is the command indi.c computed from the PREVIOUS control tick's
-  // omega, before that tick's indiUpdateActuatorState() call overwrote omega
-  // with a fresh DSHOT-telemetry reading -- so effort[i] here corresponds to
-  // velocity[i] one control tick EARLIER, not the velocity[i] alongside it in
-  // this same message. See msgs/MOTOR_STATE.yaml for the full derivation.
-  const rclcpp::Time stamp = fcStamp(msg.time_us);
-
+  // indi_controller convention used elsewhere in the workspace. Rotor speed
+  // only: EKF_INPUTS carries no commanded output, so effort is left empty.
+  const std::array<uint16_t, 6> omegas = {
+    msg.omega1, msg.omega2, msg.omega3, msg.omega4, msg.omega5, msg.omega6};
   sensor_msgs::msg::JointState motor_msg;
   motor_msg.header.stamp = stamp;
   motor_msg.header.frame_id = base_link_frame_id_;
-  const std::array<uint16_t, 4> omegas = {msg.omega1, msg.omega2, msg.omega3, msg.omega4};
-  const std::array<int16_t, 4> us = {msg.u1, msg.u2, msg.u3, msg.u4};
   for (int i = 0; i < num_rotors_; i++) {
     motor_msg.name.emplace_back("motor" + std::to_string(i));
     motor_msg.velocity.emplace_back(static_cast<double>(omegas[i]));
-    motor_msg.effort.emplace_back(static_cast<double>(us[i]) / 32767.0);
   }
   // sensor_measurements/motor_angular_speed (as2::sensors::Sensor)
   motor_sensor_ptr_->updateData(motor_msg);

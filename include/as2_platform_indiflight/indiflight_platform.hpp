@@ -195,27 +195,16 @@ private:
   void initChannels();
 
   /**
-   * @brief Publish an EKF_INPUTS message as sensor_measurements/imu.
+   * @brief Publish an EKF_INPUTS message as sensor_measurements/imu and
+   * sensor_measurements/motor_angular_speed.
    *
    * Decodes the fixed-point accel/gyro (EKF_INPUTS.yaml scales) and rotates
-   * the IMU into the body frame. Motor speed is no longer sourced from this
-   * message - see onPiProtocolMotorState().
+   * the IMU into the body frame. Rotor speeds (rad/s) are published as
+   * JointState velocity, with no effort: the message has no commanded output.
    *
    * @param msg Received EKF_INPUTS message.
    */
   void onPiProtocolEkfInputs(const pi_EKF_INPUTS_t & msg);
-
-  /**
-   * @brief Publish a MOTOR_STATE message as sensor_measurements/motor_angular_speed
-   * (velocity: rad/s, effort: commanded output fraction on [0,1]).
-   *
-   * The command in a given message corresponds to the omega value one control
-   * tick EARLIER, not the omega reported alongside it - see the message's own
-   * comment in msgs/MOTOR_STATE.yaml for the derivation.
-   *
-   * @param msg Received MOTOR_STATE message.
-   */
-  void onPiProtocolMotorState(const pi_MOTOR_STATE_t & msg);
 
   /**
    * @brief Ask the FC to echo a TIMESYNC exchange back, and time it.
