@@ -19,7 +19,7 @@ if(NOT EXISTS ${PI_PROTOCOL_DIR}/config.yaml)
   fetchcontent_declare(
     pi_protocol_upstream
     GIT_REPOSITORY https://github.com/cvar-upm/pi-protocol.git
-    GIT_TAG cvar-dev
+    GIT_TAG cvar_dev
     SOURCE_DIR ${PI_PROTOCOL_DIR}
   )
   fetchcontent_makeavailable(pi_protocol_upstream)

@@ -14,6 +14,9 @@
       mocap_topic: ""  # mocap4r2_msgs/msg/RigidBodies source, excludes pose_topic
       rigid_body_name: ""  # Body to forward. Required with mocap_topic
       rate: 100.0  # Hz of the earth->base_link TF poll, used when no topic is set
+    vtx_control:  # VTX on while this node runs, 0mW otherwise (firmware vtx_pi_control = ON)
+      enable: true  # false = never send VTX_CONTROL; the FC then keeps the VTX at 0mW while disarmed
+      heartbeat_rate: 1.0  # Hz of the VTX_CONTROL lease renewal, >= 1; the FC drops it after 3 s
     debug_topics:  # Set any to "" to not create that publisher at all
       rc_command: "debug/platform/rc_command"  # RC_OVERRIDE pulses sent, BODY_RATES only
       og_timestamp: "debug/platform/og_timestamp"  # Raw FC time_us, one per IMU sample

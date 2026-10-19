@@ -158,6 +158,19 @@ IndiflightPlatform::IndiflightPlatform(const rclcpp::NodeOptions & options)
     std::chrono::seconds(1), std::bind(&IndiflightPlatform::requestTimesync, this));
   requestTimesync();
 
+  // VTX on for as long as this node keeps renewing the lease. The first one
+  // goes out now so the VTX does not wait a period to come back from 0mW
+  if (vtx_control_enable_) {
+    vtx_heartbeat_timer_ = this->create_wall_timer(
+      std::chrono::duration<double>(1.0 / vtx_heartbeat_rate_),
+      std::bind(&IndiflightPlatform::sendVtxHeartbeat, this));
+    sendVtxHeartbeat();
+    set_vtx_srv_ = this->create_service<std_srvs::srv::SetBool>(
+      "platform/set_vtx",
+      std::bind(
+        &IndiflightPlatform::onSetVtx, this, std::placeholders::_1, std::placeholders::_2));
+  }
+
   // TEMPORARY DEBUG -- see header comment.
   send_gate_debug_timer_ = this->create_wall_timer(
     std::chrono::milliseconds(500),
@@ -199,6 +212,13 @@ void IndiflightPlatform::readParameters()
   debug_og_timestamp_topic_ = getParameter("debug_topics.og_timestamp", debug_og_timestamp_topic_);
   debug_pi_status_topic_ = getParameter("debug_topics.pi_status", debug_pi_status_topic_);
   debug_rc_topic_ = getParameter("debug_topics.rc", debug_rc_topic_);
+
+  vtx_control_enable_ = getParameter("vtx_control.enable", vtx_control_enable_);
+  vtx_heartbeat_rate_ = getParameter("vtx_control.heartbeat_rate", vtx_heartbeat_rate_);
+  // The FC drops the lease 3 s after the last renewal; two missed ones still hold
+  if (vtx_control_enable_ && vtx_heartbeat_rate_ < 1.0) {
+    throw std::runtime_error("vtx_control.heartbeat_rate must be at least 1 Hz");
+  }
 
   imu_gyro_covariance_ = getParameter("imu.covariance.gyro", imu_gyro_covariance_);
   imu_accel_covariance_ = getParameter("imu.covariance.accel", imu_accel_covariance_);
@@ -303,6 +323,11 @@ void IndiflightPlatform::readParameters()
 
 IndiflightPlatform::~IndiflightPlatform()
 {
+  // Clean shutdown only (SIGINT/SIGTERM); after a crash the FC's lease expiry
+  // does the same 3 s later
+  if (vtx_control_enable_) {
+    pi_protocol_client_.sendVtxControl(false);
+  }
   pi_protocol_client_.disconnect();
 }
 
@@ -1069,11 +1094,13 @@ void IndiflightPlatform::onPiStatus(const pi_PI_STATUS_t & msg)
   constexpr uint8_t kFlagEkfConverged = 1 << 3;
   constexpr uint8_t kFlagOffboardCtlActive = 1 << 4;
   constexpr uint8_t kFlagEmergHover = 1 << 5;
+  constexpr uint8_t kFlagVtxOff = 1 << 6;
 
   const bool armed = msg.flags & kFlagArmed;
   const bool override_active = msg.flags & kFlagPiOverrideActive;
   const bool rx_link_valid = msg.flags & kFlagRxLinkValid;
   const bool emerg_hover = msg.flags & kFlagEmergHover;
+  const bool vtx_off = msg.flags & kFlagVtxOff;
   fc_ekf_converged_ = msg.flags & kFlagEkfConverged;
   fc_offboard_ctl_active_ = msg.flags & kFlagOffboardCtlActive;
 
@@ -1087,6 +1114,11 @@ void IndiflightPlatform::onPiStatus(const pi_PI_STATUS_t & msg)
   }
   fc_emerg_hover_ = emerg_hover;
 
+  if (vtx_off != fc_vtx_off_) {
+    RCLCPP_INFO(this->get_logger(), vtx_off ? "FC holding VTX at 0mW" : "VTX on");
+  }
+  fc_vtx_off_ = vtx_off;
+
   // Debug
   if (!debug_pi_status_pub_) {
     return;
@@ -1094,13 +1126,15 @@ void IndiflightPlatform::onPiStatus(const pi_PI_STATUS_t & msg)
 
   as2_msgs::msg::UInt16MultiArrayStamped debug_msg;
   debug_msg.layout.dim.resize(1);
-  debug_msg.layout.dim[0].size = 6;
+  debug_msg.layout.dim[0].size = 7;
   debug_msg.layout.dim[0].label =
-    "armed,pi_override_active,rx_link_valid,ekf_converged,offboard_ctl_active,emerg_hover";
+    "armed,pi_override_active,rx_link_valid,ekf_converged,offboard_ctl_active,emerg_hover,"
+    "vtx_off";
   debug_msg.data = {
     static_cast<uint16_t>(armed), static_cast<uint16_t>(override_active),
     static_cast<uint16_t>(rx_link_valid), static_cast<uint16_t>(fc_ekf_converged_),
-    static_cast<uint16_t>(fc_offboard_ctl_active_), static_cast<uint16_t>(emerg_hover)};
+    static_cast<uint16_t>(fc_offboard_ctl_active_), static_cast<uint16_t>(emerg_hover),
+    static_cast<uint16_t>(vtx_off)};
   debug_msg.stamp = fcStamp(msg.time_us);
   debug_pi_status_pub_->publish(debug_msg);
 }
@@ -1108,6 +1142,28 @@ void IndiflightPlatform::onPiStatus(const pi_PI_STATUS_t & msg)
 void IndiflightPlatform::requestTimesync()
 {
   pi_protocol_client_.sendTimesyncRequest(this->get_clock()->now().nanoseconds());
+}
+
+void IndiflightPlatform::sendVtxHeartbeat()
+{
+  pi_protocol_client_.sendVtxControl(vtx_requested_on_);
+}
+
+void IndiflightPlatform::onSetVtx(
+  const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+  std::shared_ptr<std_srvs::srv::SetBool::Response> response)
+{
+  // Kept for the heartbeat, so the next renewal does not undo it
+  vtx_requested_on_ = request->data;
+  response->success = pi_protocol_client_.sendVtxControl(vtx_requested_on_);
+  if (!response->success) {
+    response->message = "Could not write VTX_CONTROL to the FC";
+  } else if (vtx_requested_on_) {
+    response->message = "VTX on";
+  } else {
+    response->message = "VTX to 0mW, except while armed or in failsafe, where the FC keeps it on";
+  }
+  RCLCPP_INFO(this->get_logger(), "set_vtx: %s", response->message.c_str());
 }
 
 void IndiflightPlatform::onPiTimesync(const pi_TIMESYNC_t & msg)

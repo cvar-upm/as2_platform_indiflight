@@ -247,6 +247,18 @@ public:
   bool sendRcOverride(uint16_t roll, uint16_t pitch, uint16_t yaw, uint16_t throttle);
 
   /**
+   * @brief Send a VTX_CONTROL message: ask the FC to keep the VTX on, or put it
+   * at its 0mW level. ON is a lease the FC drops after 3 s, so it has to be
+   * repeated for as long as it should hold. Only acts with the firmware's
+   * vtx_pi_control = ON, and never while armed or in failsafe, where the VTX
+   * is always on.
+   *
+   * @param enable true for VTX on, false for 0mW.
+   * @return true if the message was written to the FC.
+   */
+  bool sendVtxControl(bool enable);
+
+  /**
    * @brief Send a POS_SETPOINT message: position setpoint for the FC's
    * onboard position controller (firmware built with USE_LOCAL_POSITION).
    *

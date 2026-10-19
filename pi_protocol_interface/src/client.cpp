@@ -168,6 +168,9 @@ void Client::disconnect()
     read_thread_.join();
   }
   if (fd_ >= 0) {
+    // Whatever was written last (the VTX off on shutdown) leaves the UART
+    // before the port goes away
+    ::tcdrain(fd_);
     ::close(fd_);
     fd_ = -1;
   }
@@ -294,6 +297,15 @@ bool Client::sendRcOverride(uint16_t roll, uint16_t pitch, uint16_t yaw, uint16_
   piMsgRcOverrideTx.throttle = throttle;
 
   return sendMsg(&piMsgRcOverrideTx);
+}
+
+bool Client::sendVtxControl(bool enable)
+{
+  // The FC does not check time_us here; stamped like RC_OVERRIDE for the logs
+  piMsgVtxControlTx.time_us = last_fc_time_us_.load(std::memory_order_relaxed);
+  piMsgVtxControlTx.enable = enable ? 1 : 0;
+
+  return sendMsg(&piMsgVtxControlTx);
 }
 
 bool Client::sendSetpoint(

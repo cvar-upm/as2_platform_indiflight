@@ -62,6 +62,8 @@ static_assert(PI_MSG_RC_OVERRIDE_ID == 13, "RC_OVERRIDE id drifted");
 static_assert(PI_MSG_RC_OVERRIDE_PAYLOAD_LEN == 12, "RC_OVERRIDE layout drifted");
 static_assert(PI_MSG_PI_STATUS_ID == 14, "PI_STATUS id drifted");
 static_assert(PI_MSG_BATTERY_ID == 15, "BATTERY id drifted");
+static_assert(PI_MSG_VTX_CONTROL_ID == 18, "VTX_CONTROL id drifted");
+static_assert(PI_MSG_VTX_CONTROL_PAYLOAD_LEN == 5, "VTX_CONTROL layout drifted");
 
 TEST(PiProtocolParser, RoundTripImuMessage)
 {
@@ -126,6 +128,30 @@ TEST(PiProtocolParser, RoundTripRcMessage)
   EXPECT_EQ(piMsgRcRx->channel_4, 2012);
   // A channel the receiver does not provide is sent as zero
   EXPECT_EQ(piMsgRcRx->channel_16, 0);
+}
+
+TEST(PiProtocolParser, RoundTripVtxControlMessage)
+{
+  piMsgVtxControlTx.time_us = 424242;
+  piMsgVtxControlTx.enable = 1;
+
+  uint8_t buf[2 * PI_MAX_PACKET_LEN];
+  const unsigned int n = piAccumulateMsg(&piMsgVtxControlTx, buf);
+  ASSERT_GT(n, 0u);
+
+  pi_parse_states_t state{};
+  uint8_t last_id = PI_MSG_NONE_ID;
+  for (unsigned int i = 0; i < n; i++) {
+    const uint8_t id = piParse(&state, buf[i]);
+    if (id != PI_MSG_NONE_ID) {
+      last_id = id;
+    }
+  }
+
+  ASSERT_EQ(last_id, PI_MSG_VTX_CONTROL_ID);
+  ASSERT_NE(piMsgVtxControlRx, nullptr);
+  EXPECT_EQ(piMsgVtxControlRx->time_us, 424242u);
+  EXPECT_EQ(piMsgVtxControlRx->enable, 1);
 }
 
 TEST(PiProtocolParser, RoundTripTimesyncMessage)

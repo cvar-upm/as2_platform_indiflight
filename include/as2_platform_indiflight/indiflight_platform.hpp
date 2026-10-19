@@ -62,6 +62,7 @@
 #include <sensor_msgs/msg/time_reference.hpp>
 #include <std_msgs/msg/u_int16_multi_array.hpp>
 #include <mocap4r2_msgs/msg/rigid_bodies.hpp>
+#include <std_srvs/srv/set_bool.hpp>
 
 #include "as2_msgs/msg/u_int16_multi_array_stamped.hpp"
 #include "as2_core/aerial_platform.hpp"
@@ -221,6 +222,22 @@ private:
    * @param msg Received TIMESYNC reply.
    */
   void onPiTimesync(const pi_TIMESYNC_t & msg);
+
+  /**
+   * @brief Renew the VTX_CONTROL lease with the last requested VTX state. The
+   * FC drops the lease after 3 s, so this has to run well inside that.
+   */
+  void sendVtxHeartbeat();
+
+  /**
+   * @brief platform/set_vtx: switch the VTX on or to 0mW while disarmed.
+   *
+   * @param request data true for VTX on, false for 0mW.
+   * @param response success if the request was written to the FC.
+   */
+  void onSetVtx(
+    const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+    std::shared_ptr<std_srvs::srv::SetBool::Response> response);
 
   /**
    * @brief Publish the 16 receiver channels, in wire order, on debug/rc.
@@ -574,6 +591,16 @@ private:
   // Round-trip clock exchange with the FC.
   rclcpp::TimerBase::SharedPtr timesync_timer_;
   bool timesync_locked_ = false;
+
+  // VTX_CONTROL lease: VTX on while this node runs, 0mW once it stops renewing.
+  bool vtx_control_enable_ = true;
+  double vtx_heartbeat_rate_ = 1.0;
+  // Heartbeat timer and set_vtx service only, both on the spin thread.
+  bool vtx_requested_on_ = true;
+  // onPiStatus() only, on the pi-protocol reader thread.
+  bool fc_vtx_off_ = false;
+  rclcpp::TimerBase::SharedPtr vtx_heartbeat_timer_;
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr set_vtx_srv_;
 
   // TEMPORARY DEBUG -- prints ownSendCommand()'s own gate conditions directly
   // (isControlModeSettled/getConnectedStatus/getArmingState/getOffboardMode/
