@@ -784,6 +784,17 @@ void IndiflightPlatform::ownStopPlatform()
   }
 }
 
+void IndiflightPlatform::ownEmergencyLand()
+{
+  if (!pi_protocol_client_.sendSetpoint(
+      0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, SETPOINT_HOLD_LAND))
+  {
+    RCLCPP_ERROR_THROTTLE(
+      this->get_logger(), *this->get_clock(), 1000,
+      "Could not send emergency HOLD_LAND to the flight controller");
+  }
+}
+
 void IndiflightPlatform::rotateImuToDesiredFrame(
   Eigen::Vector3d & angular_velocity, Eigen::Vector3d & linear_acceleration) const
 {
@@ -1069,11 +1080,13 @@ void IndiflightPlatform::onPiStatus(const pi_PI_STATUS_t & msg)
   constexpr uint8_t kFlagEkfConverged = 1 << 3;
   constexpr uint8_t kFlagOffboardCtlActive = 1 << 4;
   constexpr uint8_t kFlagEmergHover = 1 << 5;
+  constexpr uint8_t kFlagEmergLand = 1 << 6;
 
   const bool armed = msg.flags & kFlagArmed;
   const bool override_active = msg.flags & kFlagPiOverrideActive;
   const bool rx_link_valid = msg.flags & kFlagRxLinkValid;
   const bool emerg_hover = msg.flags & kFlagEmergHover;
+  const bool emerg_land = msg.flags & kFlagEmergLand;
   fc_ekf_converged_ = msg.flags & kFlagEkfConverged;
   fc_offboard_ctl_active_ = msg.flags & kFlagOffboardCtlActive;
 
@@ -1086,6 +1099,11 @@ void IndiflightPlatform::onPiStatus(const pi_PI_STATUS_t & msg)
     handleStateMachineEvent(as2_msgs::msg::PlatformStateMachineEvent::EMERGENCY);
   }
   fc_emerg_hover_ = emerg_hover;
+  if (emerg_land && !fc_emerg_land_) {
+    RCLCPP_ERROR(
+      this->get_logger(), "FC in emergency land: descending, disarms on touchdown");
+  }
+  fc_emerg_land_ = emerg_land;
 
   // Debug
   if (!debug_pi_status_pub_) {
@@ -1094,13 +1112,15 @@ void IndiflightPlatform::onPiStatus(const pi_PI_STATUS_t & msg)
 
   as2_msgs::msg::UInt16MultiArrayStamped debug_msg;
   debug_msg.layout.dim.resize(1);
-  debug_msg.layout.dim[0].size = 6;
+  debug_msg.layout.dim[0].size = 7;
   debug_msg.layout.dim[0].label =
-    "armed,pi_override_active,rx_link_valid,ekf_converged,offboard_ctl_active,emerg_hover";
+    "armed,pi_override_active,rx_link_valid,ekf_converged,offboard_ctl_active,emerg_hover,"
+    "emerg_land";
   debug_msg.data = {
     static_cast<uint16_t>(armed), static_cast<uint16_t>(override_active),
     static_cast<uint16_t>(rx_link_valid), static_cast<uint16_t>(fc_ekf_converged_),
-    static_cast<uint16_t>(fc_offboard_ctl_active_), static_cast<uint16_t>(emerg_hover)};
+    static_cast<uint16_t>(fc_offboard_ctl_active_), static_cast<uint16_t>(emerg_hover),
+    static_cast<uint16_t>(emerg_land)};
   debug_msg.stamp = fcStamp(msg.time_us);
   debug_pi_status_pub_->publish(debug_msg);
 }

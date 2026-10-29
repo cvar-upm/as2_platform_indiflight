@@ -84,6 +84,7 @@
 #define SETPOINT_ATTITUDE   3
 #define SETPOINT_ACRO       4
 #define SETPOINT_HOLD       5
+#define SETPOINT_HOLD_LAND  6
 #define SETPOINT_YAW_RATE   (1 << 3)
 
 namespace as2_platform_indiflight
@@ -181,6 +182,12 @@ public:
    * ignores this node until disarmed.
    */
   void ownStopPlatform() override;
+  /**
+   * @brief Latch the FC into emergency land: it brakes as for the emergency
+   * hover, descends where it stopped and disarms on touchdown, ignoring this
+   * node meanwhile.
+   */
+  void ownEmergencyLand() override;
 
 private:
   /**
@@ -548,6 +555,7 @@ private:
   bool fc_ekf_converged_ = false;
   bool fc_offboard_ctl_active_ = false;
   bool fc_emerg_hover_ = false;
+  bool fc_emerg_land_ = false;
   // Exactly one of these is created, per the source parameters above.
   rclcpp::TimerBase::SharedPtr external_pose_timer_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr external_pose_sub_;
