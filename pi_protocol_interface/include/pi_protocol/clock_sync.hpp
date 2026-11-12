@@ -40,6 +40,8 @@
 
 #include <array>
 #include <atomic>
+#include <deque>
+#include <mutex>
 #include <optional>
 #include <cstdint>
 
@@ -62,14 +64,38 @@ namespace pi_protocol
  * ROS-agnostic (plain int64_t nanoseconds in/out) so it's usable from a
  * hardware-free unit test and doesn't tie transport/sync logic to rclcpp.
  *
+ * The FC clock does not run at the host's rate (1500 to 2900 ppm slow on the
+ * recorded flights, ~3700 ppm on indi_experiment), so a minimum over the last
+ * 2 s is up to 2 s stale: stamps run 3 to 5 ms early and step every bucket as
+ * old ones age out. setRateTracking() fits the offset as a line in host time
+ * instead, through the lower envelope of the last buckets' minima.
+ *
  * sync() and toHostTime() are not thread-safe and are intended to be driven
  * from a single dedicated thread, as Client's reader thread already is.
- * toFcTime() reads only the published offset and may be called from any
- * thread, which the uplink needs: it runs on the executor.
+ * toFcTime() reads only the published offset (and rate) and may be called from
+ * any thread, which the uplink needs: it runs on the executor.
  */
 class ClockSync
 {
 public:
+  /**
+   * @brief Also track the rate difference between the FC and host clocks.
+   *
+   * Off (the default): the offset is the minimum over the last 2 s. On: it is
+   * a line in host time through the lower envelope of the passive samples'
+   * per-bucket minima of the last window_ns, so a stamp follows the FC clock's
+   * actual rate. Until 4 s of buckets have been seen, and again after the FC
+   * restarts or the host clock steps, the 2 s minimum is used. Call before the
+   * first sync().
+   *
+   * @param enabled Whether to track the rate.
+   * @param window_ns How far back the line is fitted. 5 s: on the recorded
+   *        flights the rate wanders by a few hundred ppm within seconds and a
+   *        longer line lags it, while the passive floor is crisp enough for a
+   *        short one.
+   */
+  void setRateTracking(bool enabled, int64_t window_ns);
+
   /**
    * @brief Feed one (fc_time_us, host_now_ns) sample.
    * @return the current best-estimate host-clock nanosecond timestamp
@@ -137,10 +163,23 @@ private:
   int64_t unwrap(uint32_t fc_time_us);
 
   /**
-   * @brief Fold one offset candidate into the window and publish the minimum.
-   * @return The offset now in use.
+   * @brief Fold one offset candidate into the window and publish the minimum
+   * (or, with rate tracking, the line).
+   * @param round_trip Whether the candidate is a round trip's: it goes into the
+   *        2 s minimum, not into the line.
+   * @return The offset now in use, at host_now_ns.
    */
-  int64_t feed(int64_t candidate_offset_ns, int64_t host_now_ns);
+  int64_t feed(int64_t candidate_offset_ns, int64_t host_now_ns, bool round_trip);
+
+  /**
+   * @brief With rate tracking: fit the line through the buckets' minima and
+   * publish it. A fit that fails keeps the line in use for up to a window.
+   * @return Whether a line is in use (else the 2 s minimum is).
+   */
+  bool fitLine(int64_t host_now_ns);
+
+  /// The offset in use at a host instant: the line's, or the 2 s minimum.
+  int64_t offsetAt(int64_t host_ns) const;
 
   static constexpr int kNumBuckets = 8;
   // 250ms -> 2s total window. Was 2s/16s: with pi-protocol running EKF_INPUTS
@@ -177,6 +216,41 @@ private:
   // judged against.
   int64_t min_rtt_ns_ = 0;
   bool rtt_valid_ = false;
+
+  // Rate tracking (setRateTracking). The line needs this many closed buckets
+  // (4 s) before it is used, and kMinFitBuckets of them within kLineLateNs of
+  // the lower envelope: one later than that is a bucket without a low-latency
+  // sample and is left out of the fit. kLineResetBuckets bucket minima in a
+  // row further than kLineResetNs from the line mean the host clock stepped,
+  // and the fit starts over.
+  static constexpr size_t kMinLineBuckets = 16;
+  static constexpr double kMinFitBuckets = 4.0;
+  static constexpr double kLineLateNs = 100'000.0;
+  static constexpr int kLineResetBuckets = 4;
+  static constexpr int64_t kLineResetNs = 10'000'000;
+  // A rate further than this from the host's is not a clock: the fit is wrong
+  static constexpr double kMaxRate = 0.01;
+
+  struct BucketMin
+  {
+    int64_t host_ns;    // When the bucket's lowest candidate arrived
+    int64_t offset_ns;  // That candidate
+  };
+  bool track_rate_ = false;
+  int64_t rate_window_ns_ = 5'000'000'000;
+  std::deque<BucketMin> closed_buckets_;  // Oldest first, over rate_window_ns_
+  BucketMin open_bucket_{0, 0};
+  bool open_bucket_empty_ = true;  // No passive sample in it yet
+  // The last line's slope, the open bucket's lowest is picked against; 0 after a restart
+  double pick_rate_ = 0.0;
+  int off_line_buckets_ = 0;
+  // The line in use: offset = line_offset_ns_ + line_rate_ * (host - line_host_ns_).
+  // Guarded by line_mutex_ for toFcTime(); line_valid_ false = the 2 s minimum.
+  mutable std::mutex line_mutex_;
+  bool line_valid_ = false;
+  int64_t line_host_ns_ = 0;
+  int64_t line_offset_ns_ = 0;
+  double line_rate_ = 0.0;
 };
 
 }  // namespace pi_protocol

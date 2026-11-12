@@ -37,12 +37,62 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
+#include <random>
 
 #include "pi_protocol/clock_sync.hpp"
 
 using pi_protocol::ClockSync;
+
+namespace
+{
+
+// A link to an FC whose clock runs rate_ppm slow against the host's: a sample
+// every 500 us arriving 500 us plus an exponential 200 us late (in order, as on
+// a serial line), and with round_trips one a second taking 400 us each way. The
+// host clock jumps by host_step_ns at step_at_s. Returns the largest stamp error
+// from from_s to to_s, against the host instant the FC sampled at plus the
+// 500 us floor: where the line sits, round trips or not.
+int64_t maxStampError(
+  ClockSync & sync, double rate_ppm, bool round_trips, double seconds, double from_s,
+  double to_s, int64_t host_step_ns = 0, double step_at_s = -1.0)
+{
+  std::mt19937 rng(7);
+  std::exponential_distribution<double> excess_ns(1.0 / 200'000.0);
+  const int64_t start_ns = 10'000'000'000;
+  const int64_t step_at_ns = step_at_s < 0.0 ? std::numeric_limits<int64_t>::max() :
+    start_ns + static_cast<int64_t>(step_at_s * 1e9);
+  auto host = [&](int64_t t_ns) {return t_ns + (t_ns >= step_at_ns ? host_step_ns : 0);};
+  auto fc_us = [&](int64_t t_ns) {
+      return static_cast<uint32_t>(static_cast<double>(t_ns) * (1.0 - rate_ppm * 1e-6) / 1000.0);
+    };
+
+  int64_t worst_ns = 0;
+  int64_t last_arrival_ns = 0;
+  for (int64_t t_ns = start_ns; t_ns < start_ns + static_cast<int64_t>(seconds * 1e9);
+    t_ns += 500'000)
+  {
+    if (round_trips && (t_ns - start_ns) % 1'000'000'000 == 0) {
+      // Stamped at this sample's tick: FC stamps must not go backwards, or
+      // the FC looks restarted
+      sync.syncRoundTrip(fc_us(t_ns), host(t_ns - 400'000), host(t_ns + 400'000));
+    }
+    last_arrival_ns = std::max(
+      last_arrival_ns, t_ns + 500'000 + static_cast<int64_t>(excess_ns(rng)));
+    const int64_t error_ns =
+      sync.sync(fc_us(t_ns), host(last_arrival_ns)) - host(t_ns) - 500'000;
+    const double at_s = static_cast<double>(t_ns - start_ns) * 1e-9;
+    if (at_s >= from_s && at_s < to_s) {
+      worst_ns = std::max(worst_ns, std::abs(error_ns));
+    }
+  }
+  return worst_ns;
+}
+
+}  // namespace
 
 TEST(ClockSync, ConvergesToFixedOffset)
 {
@@ -200,4 +250,51 @@ TEST(ClockSync, RebuildsOffsetAfterFcRestart)
   EXPECT_EQ(*fc_stamp, fc_time_us);
   EXPECT_EQ(
     host_now_ns - static_cast<int64_t>(fc_time_us) * 1000, restart_offset_ns);
+}
+
+TEST(ClockSync, RateTrackingFollowsTheFcClockRate)
+{
+  // Recorded flights: the FC clock 1500 to 2750 ppm slow, 3700 on
+  // indi_experiment; -600 is one running fast. Exact round trips 500 us below
+  // the passive floor must not move the line: on the drones they scatter.
+  for (const bool round_trips : {false, true}) {
+    for (const double rate_ppm : {1600.0, -600.0, 3700.0}) {
+      ClockSync minimum;
+      ClockSync line;
+      line.setRateTracking(true, 5'000'000'000);
+      // A slow FC clock is what the 2 s minimum gets wrong: it holds the oldest
+      if (rate_ppm > 0.0) {
+        EXPECT_GT(maxStampError(minimum, rate_ppm, round_trips, 30.0, 5.0, 30.0), 1'000'000)
+          << rate_ppm << " ppm, round trips " << round_trips;
+      }
+      EXPECT_LT(maxStampError(line, rate_ppm, round_trips, 30.0, 5.0, 30.0), 20'000)
+        << rate_ppm << " ppm, round trips " << round_trips;
+    }
+  }
+}
+
+TEST(ClockSync, RateTrackingStartsOverWhenTheHostClockSteps)
+{
+  ClockSync line;
+  line.setRateTracking(true, 5'000'000'000);
+  // The step itself and the 2 s minimum's lag, while the line and then the minimum let it go by
+  EXPECT_LT(maxStampError(line, 1600.0, true, 30.0, 0.0, 30.0, 50'000'000, 15.0), 60'000'000);
+  ClockSync after;
+  after.setRateTracking(true, 5'000'000'000);
+  EXPECT_LT(maxStampError(after, 1600.0, true, 30.0, 20.0, 30.0, 50'000'000, 15.0), 20'000);
+}
+
+TEST(ClockSync, RateTrackingToFcTimeInvertsToHostTime)
+{
+  ClockSync line;
+  line.setRateTracking(true, 5'000'000'000);
+  maxStampError(line, 1600.0, true, 10.0, 0.0, 0.0);
+  for (int64_t host_ns = 19'000'000'000; host_ns < 20'000'000'000; host_ns += 100'000'000) {
+    const auto fc_stamp = line.toFcTime(host_ns);
+    ASSERT_TRUE(fc_stamp.has_value());
+    const auto back_ns = line.toHostTime(*fc_stamp);
+    ASSERT_TRUE(back_ns.has_value());
+    // toFcTime truncates to the microsecond
+    EXPECT_NEAR(static_cast<double>(*back_ns), static_cast<double>(host_ns), 1'100.0);
+  }
 }
