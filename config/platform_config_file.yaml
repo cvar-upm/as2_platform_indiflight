@@ -5,6 +5,9 @@
     external_odom: false  # Flag to use external odometry source
     num_rotors: 4  # Rotor speeds published, from EKF_INPUTS omega1..6 (4 for a quad)
     use_fcu_stamps: true  # Stamp IMU with the FC sample instant instead of arrival time
+    clock_sync:  # FC sample instant to host time
+      track_rate: false  # Fit the FC clock's rate too (a line over window_s), not only an offset over 2 s
+      window_s: 5.0  # How far back the line is fitted (s), at least 4.25
     pi_protocol:
       device: "/dev/ttyTHS1"  # UART wired to the FC's FUNCTION_TELEMETRY_PI port
       baudrate: 921600  # indiflight's BAUD_AUTO default

@@ -191,6 +191,13 @@ void IndiflightPlatform::readParameters()
   // pi_protocol_clock_sync_. false: the arrival time, as elsewhere in AS2.
   // debug/platform/og_timestamp carries the raw FC time_ref either way.
   use_fcu_stamps_ = getParameter("use_fcu_stamps", use_fcu_stamps_);
+  // The FC clock does not run at the host's rate: with track_rate the FC-to-host
+  // offset is a line fitted over window_s, else the minimum over the last 2 s
+  // (stamps then run 3 to 5 ms early, in steps, see pi_protocol::ClockSync)
+  const bool clock_track_rate = getParameter("clock_sync.track_rate", false);
+  const double clock_window_s = getParameter("clock_sync.window_s", 5.0);
+  pi_protocol_clock_sync_.setRateTracking(
+    clock_track_rate, static_cast<int64_t>(clock_window_s * 1e9));
   num_rotors_ = getParameter("num_rotors", num_rotors_);
   if (num_rotors_ < 1 || num_rotors_ > 6) {
     throw std::runtime_error("num_rotors must be in [1, 6]");
