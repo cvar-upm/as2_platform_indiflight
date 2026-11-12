@@ -298,3 +298,34 @@ TEST(ClockSync, RateTrackingToFcTimeInvertsToHostTime)
     EXPECT_NEAR(static_cast<double>(*back_ns), static_cast<double>(host_ns), 1'100.0);
   }
 }
+
+TEST(ClockSync, KeepsTheOffsetWhenARoundTripReplyIsAheadOfASample)
+{
+  // Drone 3, 2026-11-12: a TIMESYNC reply is stamped when the FC sends it, so the IMU sample
+  // queued behind it carries an earlier stamp. That step back is not micros() restarting.
+  for (const bool track_rate : {false, true}) {
+    ClockSync sync;
+    sync.setRateTracking(track_rate, 5'000'000'000);
+    const int64_t true_offset_ns = 5'000'000;
+    uint32_t fc_time_us = 10'000'000;
+    for (int i = 0; i < 6000; i++) {  // 12 s of 500 Hz samples, 500 us late
+      sync.sync(fc_time_us, static_cast<int64_t>(fc_time_us) * 1000 + true_offset_ns + 500'000);
+      fc_time_us += 2000;
+    }
+    const int64_t host_ns = static_cast<int64_t>(fc_time_us) * 1000 + true_offset_ns;
+    const int64_t before = sync.toHostTime(fc_time_us).value();
+    // The reply, 1 ms ahead of the sample that follows it
+    sync.syncRoundTrip(fc_time_us + 1000, host_ns + 600'000, host_ns + 2'400'000);
+    const int64_t after = sync.sync(fc_time_us, host_ns + 900'000);
+    EXPECT_NEAR(static_cast<double>(after), static_cast<double>(before), 1000.0)
+      << "track_rate " << track_rate;
+    // And the stream goes on as before
+    for (int i = 0; i < 500; i++) {
+      fc_time_us += 2000;
+      const int64_t sample_host_ns = static_cast<int64_t>(fc_time_us) * 1000 + true_offset_ns;
+      EXPECT_NEAR(
+        static_cast<double>(sync.sync(fc_time_us, sample_host_ns + 500'000)),
+        static_cast<double>(sample_host_ns + 500'000), 1000.0) << "track_rate " << track_rate;
+    }
+  }
+}

@@ -157,8 +157,9 @@ public:
 
 private:
   /**
-   * @brief Extend a wrapping FC stamp into a monotonic microsecond count,
-   * restarting the estimate when the counter did.
+   * @brief Extend a wrapping FC stamp into a microsecond count, restarting the
+   * estimate when the counter did. A stamp slightly older than the newest keeps
+   * the epoch and leaves the newest as it is.
    */
   int64_t unwrap(uint32_t fc_time_us);
 
@@ -191,6 +192,9 @@ private:
   // there, pending a real fix on the FC side.
   static constexpr int64_t kBucketDurationNs = 250'000'000;
   static constexpr int64_t kWrapPeriodUs = int64_t{1} << 32;   // ~71.6 minutes
+  // A step back no larger than this is a stamp out of order, not micros() restarting: a restart
+  // goes back by the FC's whole uptime
+  static constexpr uint32_t kMaxReorderUs = 100'000;
 
   // A reply that took far longer than this link has shown it can cannot have
   // its midpoint trusted: the delay it met was one-sided by an unknown share.

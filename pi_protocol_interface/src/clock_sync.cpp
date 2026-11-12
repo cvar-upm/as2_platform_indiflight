@@ -62,14 +62,19 @@ void ClockSync::setRateTracking(bool enabled, int64_t window_ns)
 
 int64_t ClockSync::unwrap(uint32_t fc_time_us)
 {
+  constexpr uint32_t kHalfRangeUs = std::numeric_limits<uint32_t>::max() / 2;
   if (!initialized_) {
     last_fc_time_us_ = fc_time_us;
     fc_time_epoch_us_ = 0;
   } else if (fc_time_us < last_fc_time_us_) {
-    constexpr uint32_t kHalfRangeUs = std::numeric_limits<uint32_t>::max() / 2;
-    if (last_fc_time_us_ - fc_time_us > kHalfRangeUs) {
+    const uint32_t back_us = last_fc_time_us_ - fc_time_us;
+    if (back_us > kHalfRangeUs) {
       // fc_time_us wrapped (uint32_t microsecond counter, ~71.6 minute period).
       fc_time_epoch_us_ += kWrapPeriodUs;
+    } else if (back_us <= kMaxReorderUs) {
+      // A little older than the newest, not a restart: the FC stamps a TIMESYNC reply when it
+      // sends it, so a sample taken before but queued behind it arrives with an earlier stamp.
+      return fc_time_epoch_us_ + static_cast<int64_t>(fc_time_us);
     } else {
       // Too small to be a wrap: micros() restarted, so the offset is stale.
       initialized_ = false;
@@ -78,6 +83,9 @@ int64_t ClockSync::unwrap(uint32_t fc_time_us)
       // The old link's round trips say nothing about the new one.
       rtt_valid_ = false;
     }
+  } else if (fc_time_us - last_fc_time_us_ > kHalfRangeUs) {
+    // The same reordering across a wrap: a stamp from before it, after one that crossed it
+    return fc_time_epoch_us_ - kWrapPeriodUs + static_cast<int64_t>(fc_time_us);
   }
   last_fc_time_us_ = fc_time_us;
 
